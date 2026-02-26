@@ -65,7 +65,7 @@ def fetch_issues_from_jira(start_at: int, batch_size: int) -> tuple[list[JiraIss
     fields_to_include = ["summary", "description"]
 
     params = {
-        "jql": "created>=-365d ORDER BY created DESC",
+        "jql": get_from_env("JIRA_FETCH_ISSUES_JQL", "project=TEST AND created>=-365d ORDER BY created DESC"),
         "startAt": str(start_at),
         "maxResults": str(batch_size),
         "fields": ",".join(fields_to_include),
