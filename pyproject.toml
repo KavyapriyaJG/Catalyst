@@ -12,5 +12,6 @@ dependencies = [
     "langgraph>=1.0.8",
     "psycopg[binary]>=3.2.10",
     "python-dotenv>=1.2.1",
+    "sqlalchemy>=2.0.47",
     "uvicorn>=0.41.0",
 ]

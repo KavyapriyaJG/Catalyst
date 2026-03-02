@@ -10,7 +10,7 @@ This module currently provides:
 
 - Jira issue context retrieval
 - AI-assisted responses from Jira issue data
-- Jira-to-Postgres batch ingestion for backlog-related issue fields
+- Jira-to-Postgres batch ingestion using SQLAlchemy ORM
 
 ## Environment variables
 
@@ -21,10 +21,11 @@ Set the following environment variables:
 - `JIRA_AUTH_TOKEN` (Atlassian API token)
 - `GROQ_API_KEY`
 - `GROQ_MODEL` (optional, default: `llama-3.1-8b-instant`)
-- `JIRA_JQL` (optional)
+- `JIRA_FETCH_ISSUES_JQL` (optional, default: `project=TEST AND created>=-365d ORDER BY created DESC`)
 - `JIRA_BATCH_SIZE` (optional, default: `50`, max: `100`)
+- `JIRA_BATCHES_TO_BE_PROCESSED_COUNT` (optional, default: `10`)
 - `POSTGRES_DSN` (example: `postgresql://user:password@localhost:5432/dbname`)
-- `POSTGRES_TABLE` (optional, default: `jira_issues`)
+- `ORM_ECHO_SQL` (optional: `false`, `true`, or `debug`)
 
 ## Agent API
 
@@ -41,12 +42,17 @@ Example request:
 
 ## Jira batch ingestion
 
-The ingestion pipeline reads Jira issues in batches and upserts these fields into Postgres:
+The ingestion pipeline reads Jira issues in batches and upserts data into PostgreSQL tables:
 
-- `id`
-- `key`
-- `summary`
-- `description`
+- `issues` (`id`, `issue_key`)
+- `issue_hierarchy` (`parent_id`, `child_id`)
+- `issue_links` (`source_id`, `target_id`, `link_type`)
+
+Notes:
+
+- Tables are created automatically via SQLAlchemy metadata.
+- Issue rows are upserted with `ON CONFLICT (id) DO UPDATE`.
+- Hierarchy and link rows are inserted with conflict-ignore semantics.
 
 Run:
 
