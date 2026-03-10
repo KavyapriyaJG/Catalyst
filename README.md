@@ -39,6 +39,16 @@ Example request:
 }
 ```
 
+## Streamlit UI
+
+A simple Streamlit UI is available at `ui/app.py` and uses the same agent logic as the FastAPI route.
+
+Run:
+
+```bash
+uv run streamlit run ui/app.py
+```
+
 ## Jira batch ingestion
 
 The ingestion pipeline reads Jira issues in batches and upserts these fields into Postgres:

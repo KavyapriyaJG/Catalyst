@@ -14,6 +14,10 @@ class AgentRequest(BaseModel):
 class AgentResponse(BaseModel):
     response: str
 
+
+def generate_agent_response(message: str, issue_id: str) -> str:
+    return run_simple_langgraph(message, issue_id)
+
 @app.get("/")
 def greet():
     return "Hello Catalyst !"
@@ -21,4 +25,4 @@ def greet():
 
 @app.post("/agent", response_model=AgentResponse)
 def run_agent(payload: AgentRequest):
-    return AgentResponse(response=run_simple_langgraph(payload.message, payload.issue_id))
+    return AgentResponse(response=generate_agent_response(payload.message, payload.issue_id))
