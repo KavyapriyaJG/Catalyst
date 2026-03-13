@@ -1,6 +1,10 @@
+import json
+import urllib.error
+import urllib.request
+from typing import Literal
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from backlog_generation.epic_agent import (
@@ -9,6 +13,12 @@ from backlog_generation.epic_agent import (
     JiraStoriesOutput,
     generate_jira_epics,
     generate_stories_from_epic,
+)
+from jira_utils import (
+    build_jira_bulk_epics_payload,
+    build_jira_bulk_story_payload,
+    jira_auth_header,
+    jira_bulk_endpoint,
 )
 from backlog_generation.simple_langgraph import run_simple_langgraph
 
@@ -24,7 +34,7 @@ class AgentResponse(BaseModel):
     response: str
 
 
-class JiraEpicResponse(BaseModel):
+class JiraEpicsResponse(BaseModel):
     epics: list[JiraEpicOutput]
 
 
@@ -35,6 +45,11 @@ class JiraStoriesRequest(BaseModel):
 
 class JiraStoriesResponse(BaseModel):
     stories: JiraStoriesOutput
+
+
+class JiraBulkPublishResponse(BaseModel):
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[Any] = Field(default_factory=list)
 
 
 def generate_agent_response(message: str, issue_id: str) -> str:
@@ -51,7 +66,7 @@ def run_agent(payload: AgentRequest):
     return AgentResponse(response=generate_agent_response(payload.message, payload.issue_id))
 
 
-@app.post("/jira/epic", response_model=JiraEpicResponse)
+@app.post("/jira/epic", response_model=JiraEpicsResponse)
 async def run_jira_epic_agent(
     prompt: str = Form(...),
     epic_count: int = Form(3),
@@ -91,7 +106,7 @@ async def run_jira_epic_agent(
     except Exception as error:
         raise HTTPException(status_code=500, detail=f"Epic generation failed: {error}") from error
 
-    return JiraEpicResponse(epics=validated_epics.epics)
+    return JiraEpicsResponse(epics=validated_epics.epics)
 
 
 @app.post("/jira/stories", response_model=JiraStoriesResponse)
@@ -107,3 +122,75 @@ def run_jira_story_agent(payload: JiraStoriesRequest):
         raise HTTPException(status_code=500, detail=f"Story generation failed: {error}") from error
 
     return JiraStoriesResponse(stories=validated_stories)
+
+
+@app.post("/jira/publish/issues", response_model=JiraBulkPublishResponse)
+def publish_issues_to_jira(
+    payload: JiraEpicsResponse | JiraStoriesResponse,
+    issue_type: Literal["epic", "story"] = Query(default="epic", alias="type"),
+    parent_key: str | None = Query(default=None, alias="parent-key"),
+):
+    if issue_type == "story":
+        if not isinstance(payload, JiraStoriesResponse):
+            raise HTTPException(
+                status_code=400,
+                detail="For type=story, payload must include a `stories` object.",
+            )
+        if not payload.stories.stories:
+            raise HTTPException(status_code=400, detail="`stories.stories` cannot be empty.")
+    else:
+        if not isinstance(payload, JiraEpicsResponse):
+            raise HTTPException(
+                status_code=400,
+                detail="For type=epic, payload must include an `epics` array.",
+            )
+        if not payload.epics:
+            raise HTTPException(status_code=400, detail="`epics` cannot be empty.")
+    
+    try:
+        if issue_type == "story":
+            jira_bulk_payload = build_jira_bulk_story_payload(
+                payload.stories,
+                parent_key=parent_key,
+            )
+        else:
+            jira_bulk_payload = build_jira_bulk_epics_payload(payload.epics)
+    except ValueError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    
+
+    request = urllib.request.Request(
+        jira_bulk_endpoint(),
+        data=json.dumps(jira_bulk_payload).encode("utf-8"),
+        headers={
+            "Authorization": jira_auth_header(),
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            jira_response = json.loads(response.read().decode("utf-8"))
+    except ValueError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    except urllib.error.HTTPError as error:
+        error_body = error.read().decode("utf-8", errors="ignore")
+        try:
+            jira_error = json.loads(error_body) if error_body else {"message": error.reason}
+        except json.JSONDecodeError:
+            jira_error = {"message": error_body or str(error.reason)}
+        raise HTTPException(status_code=error.code, detail=jira_error) from error
+    except urllib.error.URLError as error:
+        raise HTTPException(status_code=502, detail=f"Failed to reach Jira: {error.reason}") from error
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=502, detail=f"Invalid JSON response from Jira: {error}") from error
+
+    if not isinstance(jira_response, dict):
+        raise HTTPException(status_code=502, detail="Unexpected Jira response format.")
+
+    return JiraBulkPublishResponse(
+        issues=jira_response.get("issues", []),
+        errors=jira_response.get("errors", []),
+    )
