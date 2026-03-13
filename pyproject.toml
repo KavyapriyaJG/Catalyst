@@ -9,9 +9,12 @@ dependencies = [
     "ipython>=9.10.0",
     "langchain>=1.2.10",
     "langchain-groq>=0.3.8",
+    "langchain-huggingface>=0.3.1",
     "langgraph>=1.0.8",
     "psycopg[binary]>=3.2.10",
     "python-dotenv>=1.2.1",
+    "sentence-transformers>=4.1.0",
     "streamlit>=1.49.0",
+    "sqlalchemy>=2.0.47",
     "uvicorn>=0.41.0",
 ]
