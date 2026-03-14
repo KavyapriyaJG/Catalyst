@@ -5,6 +5,7 @@ from typing import Literal
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from backlog_generation.epic_agent import (
@@ -23,6 +24,19 @@ from jira_utils import (
 from backlog_generation.simple_langgraph import run_simple_langgraph
 
 app = FastAPI()
+
+allowed_origins = [
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class AgentRequest(BaseModel):

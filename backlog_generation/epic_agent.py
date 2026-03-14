@@ -215,8 +215,10 @@ def generate_jira_epics(
 
     if supporting_documents:
         documents = _build_documents(supporting_documents)
+        # print(f"Built {len(documents)} document chunks from supporting documents.")
         if documents:
             retrieved_context = _retrieve_context(clean_prompt, documents)
+            # print(f"Retrieved context:\n{retrieved_context}\n--- End of retrieved context ---")
             if retrieved_context:
                 user_message = (
                     "Generate a list of Jira epics in structured JSON format.\n\n"
