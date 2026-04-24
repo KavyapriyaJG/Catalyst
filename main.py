@@ -1,11 +1,20 @@
 import json
+import os
+import re
+import shutil
 import urllib.error
 import urllib.request
+import uuid
+import asyncio
+import queue as queue_module
+from datetime import datetime
+from pathlib import Path
 from typing import Literal
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backlog_generation.epic_agent import (
@@ -28,6 +37,8 @@ app = FastAPI()
 allowed_origins = [
     "http://localhost:8080",
     "http://127.0.0.1:8080",
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
 ]
 
 app.add_middleware(
@@ -208,3 +219,140 @@ def publish_issues_to_jira(
         issues=jira_response.get("issues", []),
         errors=jira_response.get("errors", []),
     )
+
+
+# =========================
+# PRD GENERATION (SSE)
+# =========================
+
+from prd_generation.prd_generation_graph import run_prd_pipeline
+
+WORKSPACE_DIR = Path(__file__).parent / "workspace"
+GENERATED_PRDS_DIR = Path(__file__).parent / "generated_prds"
+
+
+class PrdGenerateRequest(BaseModel):
+    input_path: str | None = None
+    github_urls: list[str] | None = None
+    documents: list | None = None
+
+
+@app.post("/prd/generate")
+async def generate_prd_sse(payload: PrdGenerateRequest):
+    if not payload.input_path and not payload.github_urls:
+        raise HTTPException(
+            status_code=400, detail="Provide either input_path or github_urls"
+        )
+
+    input_path = payload.input_path
+
+    if payload.github_urls:
+        if not payload.github_urls:
+            raise HTTPException(
+                status_code=400, detail="github_urls list cannot be empty"
+            )
+        url = payload.github_urls[0].strip()
+        if not re.match(
+            r"^https://[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)+(?:\.git)?$", url
+        ):
+            raise HTTPException(
+                status_code=400, detail=f"Invalid GitHub URL format: {url}"
+            )
+
+        WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+        repo_name = url.rstrip("/").split("/")[-1].replace(".git", "")
+        clone_dir = WORKSPACE_DIR / repo_name
+
+        if clone_dir.exists():
+            shutil.rmtree(clone_dir)
+
+        try:
+            import git
+            git.Repo.clone_from(url, str(clone_dir))
+        except git.GitCommandError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to clone repository: {e.stderr}",
+            )
+
+        input_path = str(clone_dir)
+
+    if not os.path.isdir(input_path):
+        raise HTTPException(
+            status_code=400, detail=f"Path does not exist: {input_path}"
+        )
+
+    event_queue: queue_module.Queue[str] = queue_module.Queue()
+
+    async def event_generator():
+        pipeline_task = asyncio.create_task(
+            run_prd_pipeline(input_path, event_queue)
+        )
+
+        while not pipeline_task.done():
+            await asyncio.sleep(0.1)
+            while not event_queue.empty():
+                try:
+                    msg = event_queue.get_nowait()
+                    yield f"data: {msg}\n\n"
+                except queue_module.Empty:
+                    break
+
+        # Drain remaining events
+        while not event_queue.empty():
+            try:
+                msg = event_queue.get_nowait()
+                yield f"data: {msg}\n\n"
+            except queue_module.Empty:
+                break
+
+        # Emit final result or error
+        try:
+            prd_text = pipeline_task.result()
+
+            GENERATED_PRDS_DIR.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = uuid.uuid4().hex[:8]
+            filename = f"prd_{timestamp}_{unique_id}.md"
+            filepath = GENERATED_PRDS_DIR / filename
+            filepath.write_text(prd_text)
+
+            yield (
+                f"event: complete\n"
+                f"data: {json.dumps({'prd': prd_text, 'file': filename})}\n\n"
+            )
+        except Exception as e:
+            yield (
+                f"event: error\n"
+                f"data: {json.dumps({'error': str(e)})}\n\n"
+            )
+
+    return StreamingResponse(
+        event_generator(), media_type="text/event-stream"
+    )
+
+
+class PrdListItem(BaseModel):
+    filename: str
+
+
+class PrdItem(BaseModel):
+    filename: str
+    content: str
+
+
+@app.get("/prd/list", response_model=list[PrdListItem])
+def list_prds():
+    GENERATED_PRDS_DIR.mkdir(parents=True, exist_ok=True)
+    return [
+        PrdListItem(filename=filepath.name)
+        for filepath in sorted(GENERATED_PRDS_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    ]
+
+
+@app.get("/prd/{filename}", response_model=PrdItem)
+def get_prd(filename: str):
+    filepath = GENERATED_PRDS_DIR / filename
+    if not filepath.exists() or filepath.suffix != ".md":
+        raise HTTPException(status_code=404, detail=f"PRD not found: {filename}")
+    return PrdItem(filename=filepath.name, content=filepath.read_text())
