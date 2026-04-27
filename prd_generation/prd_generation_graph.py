@@ -10,6 +10,7 @@ try:
 except ImportError:
     from prompts import ANALYSIS_AGENT_PROMPT, PRD_GENERATOR_PROMPT, REVIEWER_PROMPT, RECONCILER_PROMPT
 import os
+import re
 import sys
 import json
 import time
@@ -62,8 +63,8 @@ class AgentState(TypedDict):
 # =========================
 
 llm_codex = ChatOpenAI(
-    model="gpt-5.3-codex",
-    base_url="https://gitnexus-test.openai.azure.com/openai/v1/",
+    model=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-5.3-codex"),
+    base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
     api_key=os.getenv("AZURE_OPENAI_API_KEY"),
     timeout=600,
     max_retries=2,
@@ -71,10 +72,11 @@ llm_codex = ChatOpenAI(
 )
 
 llm_claude = ChatAnthropic(
-    model="claude-opus-4-7",
-    anthropic_api_url="https://kavin-mnh5g313-eastus2.services.ai.azure.com/anthropic/",
+    model=os.getenv("AZURE_ANTHROPIC_DEPLOYMENT_NAME", "claude-opus-4-7"),
+    anthropic_api_url=os.getenv("AZURE_ANTHROPIC_ENDPOINT"),
     anthropic_api_key=os.getenv("AZURE_ANTHROPIC_API_KEY"),
     # thinking={"type": "adaptive", "display": "summarized"},
+    # thinking={"type": "adaptive"},
     timeout=600,
     max_retries=2
 )
@@ -181,13 +183,13 @@ analysis_agent = create_deep_agent(
 
 def generate_prd(state: AgentState):
     print("\n📝 [Step 2/4] Generating PRD from analysis...")
-    print("   Invoking Claude (claude-opus-4-7) for PRD generation...")
+    print(f"   Invoking Codex {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-5.3-codex')} for PRD generation...")
     prompt = PRD_GENERATOR_PROMPT.format(analysis=state['analysis'])
     t0 = time.time()
-    result = llm_claude.invoke(prompt)
+    result = llm_codex.invoke(prompt)
     elapsed = time.time() - t0
     prd_text = extract_text(result.content)
-    print(f"   Claude responded in {int(elapsed)}s — PRD generated ({len(prd_text)} chars)")
+    print(f"   Codex responded in {int(elapsed)}s — PRD generated ({len(prd_text)} chars)")
     return {"prd": prd_text}
 
 # =========================
@@ -196,20 +198,38 @@ def generate_prd(state: AgentState):
 
 def review_prd(state: AgentState):
     print(f"\n🔍 [Step 3/4] Reviewing PRD (iteration {state.get('iteration', 0) + 1})...")
-    print("   Invoking Codex (gpt-5.3-codex) for PRD review...")
+    print(f"   Invoking Claude {os.getenv('AZURE_ANTHROPIC_DEPLOYMENT_NAME', 'claude-opus-4-7')} for PRD review...")
     prompt = REVIEWER_PROMPT.format(
         analysis=json.dumps(state['analysis'], indent=2) if isinstance(state['analysis'], dict) else str(state['analysis']),
         prd=state['prd']
     )
     t0 = time.time()
-    result = llm_codex.invoke(prompt)
+    result = llm_claude.invoke(prompt)
     elapsed = time.time() - t0
-    print(f"   Codex responded in {int(elapsed)}s")
+    print(f"   Claude responded in {int(elapsed)}s")
     raw = extract_text(result.content)
 
+    # Strip markdown code fences if present (```json ... ``` or ``` ... ```)
+    stripped = raw.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        # Remove opening fence (```json or ```)
+        lines = lines[1:]
+        # Remove closing fence
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+
+    # Extract first {...} JSON object if there's leading/trailing text
+    json_match = re.search(r'\{.*\}', stripped, re.DOTALL)
+    if json_match:
+        stripped = json_match.group(0)
+
     try:
-        parsed = json.loads(raw)
-    except:
+        parsed = json.loads(stripped)
+    except Exception as parse_err:
+        print(f"   WARNING: Failed to parse review JSON: {parse_err}")
+        print(f"   Raw response (first 500 chars): {raw[:500]}")
         parsed = {
             "score": 0,
             "issues": {"critical": ["Invalid JSON"], "moderate": [], "minor": []}
@@ -237,7 +257,7 @@ def review_prd(state: AgentState):
 
 def reconcile(state: AgentState):
     print(f"\n🔧 [Step 4/4] Reconciling PRD (iteration {state['iteration'] + 1})...")
-    print("   Invoking Claude (claude-opus-4-7) for PRD reconciliation...")
+    print(f"   Invoking Codex {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-5.3-codex')} for PRD reconciliation...")
     analysis_str = json.dumps(state['analysis'], indent=2) if isinstance(state['analysis'], dict) else str(state['analysis'])
     prompt = RECONCILER_PROMPT.format(
         prd=state['prd'],
@@ -245,10 +265,10 @@ def reconcile(state: AgentState):
         analysis=analysis_str
     )
     t0 = time.time()
-    result = llm_claude.invoke(prompt)
+    result = llm_codex.invoke(prompt)
     elapsed = time.time() - t0
     prd_text = extract_text(result.content)
-    print(f"   Claude responded in {int(elapsed)}s — Reconciled PRD ({len(prd_text)} chars)")
+    print(f"   Codex responded in {int(elapsed)}s — Reconciled PRD ({len(prd_text)} chars)")
     return {
         "prd": prd_text,
         "iteration": state["iteration"] + 1
@@ -269,7 +289,7 @@ def analyze(s):
 
     # Step 2: Let the deep agent analyze using task tool for subagent delegation
     modules_list = "\n".join(f"  - {m} ({info['files']} files, {info['chars']} chars)" for m, info in sorted(_module_summary.items()))
-    print(f"   Invoking analysis agent (Codex) with {len(_module_summary)} modules...")
+    print(f"   Invoking analysis agent {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-5.3-codex')} with {len(_module_summary)} modules...")
     t0 = time.time()
     result = analysis_agent.invoke({
         "messages": [{"role": "user", "content": (
@@ -453,8 +473,8 @@ async def main():
     start_time = time.time()
     print("🚀 Starting COBOL Migration Analysis Pipeline\n")
     result = await prd_pipeline.ainvoke({
-        "input_path": "/Users/kavinkumarbaskar/Downloads/testing-cobol/CobolCraft",
-        # "input_path": "/Users/kavinkumarbaskar/Downloads/testing-cobol/zosconnect-sample-cobol-apirequester",
+        # "input_path": "/Users/kavinkumarbaskar/Downloads/testing-cobol/CobolCraft",
+        "input_path": "/Users/kavinkumarbaskar/Downloads/testing-cobol/zosconnect-sample-cobol-apirequester",
         "iteration": 0,
         "score": 0,
         "best_prd": "",

@@ -178,7 +178,7 @@ OUTPUT FORMAT — Produce a structured PRD with these sections:
 COBOL ANALYSIS:
 {analysis}
 
-You will be reviewed by Codex and must meet a high standard of quality, completeness, and accuracy. Be thorough and precise. The next agent will critique your output and ask for revisions, so get it as right as possible.
+You will be reviewed by another model and must meet a high standard of quality, completeness, and accuracy. Be thorough and precise. The next agent will critique your output and ask for revisions, so get it as right as possible.
 """
 
 
@@ -387,5 +387,5 @@ It must be: implementation-ready, architecturally sound, internally consistent, 
 OUTPUT:
 Return ONLY the final corrected PRD — no commentary, no JSON wrapper, no preamble. Just the full PRD document.
 
-You will be reviewed by Codex and must meet a high standard of quality, completeness, and accuracy. Be thorough and precise. The next agent will critique your output and ask for revisions, so get it as right as possible.
+You will be reviewed by another model and must meet a high standard of quality, completeness, and accuracy. Be thorough and precise. The next agent will critique your output and ask for revisions, so get it as right as possible.
 """
