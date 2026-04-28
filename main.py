@@ -1,14 +1,14 @@
+import asyncio
 import json
 import os
+from pathlib import Path
+import queue as queue_module
 import re
 import shutil
 import urllib.error
 import urllib.request
 import uuid
-import asyncio
-import queue as queue_module
 from datetime import datetime
-from pathlib import Path
 from typing import Literal
 from typing import Any
 
@@ -16,6 +16,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from dummy_prd_content import DUMMY_PRD_STREAM_EVENTS, DUMMY_PRD_TEXT
 
 from backlog_generation.epic_agent import (
     JiraEpicOutput,
@@ -356,3 +358,32 @@ def get_prd(filename: str):
     if not filepath.exists() or filepath.suffix != ".md":
         raise HTTPException(status_code=404, detail=f"PRD not found: {filename}")
     return PrdItem(filename=filepath.name, content=filepath.read_text())
+
+
+# =========================
+# DUMMY PRD GENERATION (SSE) — no LLM calls, simulates real streaming
+# =========================
+
+@app.post("/prd/generate/dummy")
+async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
+    """Dummy endpoint that replays the real /prd/generate SSE stream with artificial delays."""
+
+    async def event_generator():
+        for msg, delay in DUMMY_PRD_STREAM_EVENTS:
+            yield f"data: {msg}\n\n"
+            await asyncio.sleep(delay)
+
+        # ── Final: write file and emit complete event ──────────────────────
+        GENERATED_PRDS_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = uuid.uuid4().hex[:8]
+        filename = f"prd_{timestamp}_{unique_id}.md"
+        filepath = GENERATED_PRDS_DIR / filename
+        filepath.write_text(DUMMY_PRD_TEXT)
+
+        yield (
+            f"event: complete\n"
+            f"data: {json.dumps({'prd': DUMMY_PRD_TEXT, 'file': filename})}\n\n"
+        )
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
