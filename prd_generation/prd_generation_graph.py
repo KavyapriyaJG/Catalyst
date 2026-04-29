@@ -9,6 +9,7 @@ try:
     from prd_generation.prompts import ANALYSIS_AGENT_PROMPT, PRD_GENERATOR_PROMPT, REVIEWER_PROMPT, RECONCILER_PROMPT
 except ImportError:
     from prompts import ANALYSIS_AGENT_PROMPT, PRD_GENERATOR_PROMPT, REVIEWER_PROMPT, RECONCILER_PROMPT
+
 import os
 import re
 import sys
@@ -17,6 +18,7 @@ import time
 import queue as queue_module
 import logging
 from dotenv import load_dotenv
+from utils.document_utils import chunk_text, build_documents, get_embeddings, retrieve_context
 
 load_dotenv()
 

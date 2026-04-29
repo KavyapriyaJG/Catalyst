@@ -7,7 +7,7 @@ from typing import Any, TypeVar
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.documents import Document
-from langchain_core.vectorstores import InMemoryVectorStore
+from utils.document_utils import chunk_text, build_documents, get_embeddings, retrieve_context
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field
 from .prompt import EPIC_SYSTEM_PROMPT, STORIES_SYSTEM_PROMPT
@@ -74,78 +74,7 @@ def _get_llm() -> ChatGroq:
     return ChatGroq(model=model_name, api_key=groq_api_key, temperature=0.2)
 
 
-def _chunk_text(text: str, chunk_size: int = 1200, overlap: int = 200) -> list[str]:
-    cleaned = text.strip()
-    if not cleaned:
-        return []
 
-    chunks: list[str] = []
-    start = 0
-    step = max(1, chunk_size - overlap)
-
-    while start < len(cleaned):
-        end = min(len(cleaned), start + chunk_size)
-        chunks.append(cleaned[start:end])
-        start += step
-
-    return chunks
-
-
-def _build_documents(supporting_documents: list[dict[str, str]]) -> list[Document]:
-    documents: list[Document] = []
-    for source_index, item in enumerate(supporting_documents, start=1):
-        filename = item.get("filename", f"document-{source_index}.txt")
-        content = item.get("content", "")
-
-        for chunk_index, chunk in enumerate(_chunk_text(content), start=1):
-            documents.append(
-                Document(
-                    page_content=chunk,
-                    metadata={"source": filename, "chunk": chunk_index},
-                )
-            )
-
-    return documents
-
-
-def _get_embeddings() -> Any:
-    try:
-        from langchain_huggingface import HuggingFaceEmbeddings
-    except ImportError as error:
-        raise RuntimeError(
-            "Missing dependency 'langchain-huggingface'. Install with: "
-            "pip install langchain-huggingface sentence-transformers"
-        ) from error
-
-    model_name = os.getenv(
-        "HUGGINGFACE_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
-    ).strip()
-    if not model_name:
-        model_name = "sentence-transformers/all-MiniLM-L6-v2"
-
-    return HuggingFaceEmbeddings(model_name=model_name)
-
-
-def _retrieve_context(query: str, documents: list[Document], top_k: int = 6) -> str:
-    if not documents:
-        return ""
-
-    vector_store = InMemoryVectorStore(embedding=_get_embeddings())
-    vector_store.add_documents(documents)
-
-    retrieved = vector_store.similarity_search(query, k=min(top_k, len(documents)))
-    if not retrieved:
-        return ""
-
-    lines: list[str] = []
-    for index, document in enumerate(retrieved, start=1):
-        source = str(document.metadata.get("source", "unknown"))
-        chunk = str(document.metadata.get("chunk", "?"))
-        lines.append(
-            f"[{index}] source={source} chunk={chunk}\n{document.page_content.strip()}"
-        )
-
-    return "\n\n".join(lines)
 
 
 def _slugify(text: str) -> str:
@@ -214,10 +143,10 @@ def generate_jira_epics(
     )
 
     if supporting_documents:
-        documents = _build_documents(supporting_documents)
+        documents = build_documents(supporting_documents)
         # print(f"Built {len(documents)} document chunks from supporting documents.")
         if documents:
-            retrieved_context = _retrieve_context(clean_prompt, documents)
+            retrieved_context = retrieve_context(clean_prompt, documents)
             # print(f"Retrieved context:\n{retrieved_context}\n--- End of retrieved context ---")
             if retrieved_context:
                 user_message = (
