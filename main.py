@@ -34,7 +34,30 @@ from jira_utils import (
 )
 from backlog_generation.simple_langgraph import run_simple_langgraph
 
+# ────────────────────────────────────────────────────────────────
+# Constants & Utilities
+# ────────────────────────────────────────────────────────────────
+
 app = FastAPI()
+
+WORKSPACE_DIR = Path(__file__).parent / "workspace"
+GENERATED_PRDS_DIR = Path(__file__).parent / "generated_prds"
+UPLOADS_DIR = Path(__file__).parent / "uploads"
+
+# Ensure directories exist on startup
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+GENERATED_PRDS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def sanitize_filename(filename: str) -> str:
+    """Remove/replace unsafe characters from filename"""
+    # Keep only alphanumeric, dots, hyphens, underscores
+    safe = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+    # Remove leading/trailing dots and slashes
+    safe = safe.strip('._/\\')
+    # Limit length to 255 chars (filesystem limit)
+    safe = safe[:255]
+    return safe or "file"
 
 allowed_origins = [
     "http://localhost:8080",
@@ -229,21 +252,18 @@ def publish_issues_to_jira(
 
 from prd_generation.prd_generation_graph import run_prd_pipeline
 
-WORKSPACE_DIR = Path(__file__).parent / "workspace"
-GENERATED_PRDS_DIR = Path(__file__).parent / "generated_prds"
-
 
 class PrdGenerateRequest(BaseModel):
     input_path: str | None = None
     github_urls: list[str] | None = None
-    documents: list | None = None
+    documents: list[dict] | None = None
 
 
 @app.post("/prd/generate")
 async def generate_prd_sse(payload: PrdGenerateRequest):
-    if not payload.input_path and not payload.github_urls:
+    if not payload.input_path and not payload.github_urls and not payload.documents:
         raise HTTPException(
-            status_code=400, detail="Provide either input_path or github_urls"
+            status_code=400, detail="Provide either input_path, github_urls, or documents"
         )
 
     input_path = payload.input_path
@@ -312,7 +332,6 @@ async def generate_prd_sse(payload: PrdGenerateRequest):
         try:
             prd_text = pipeline_task.result()
 
-            GENERATED_PRDS_DIR.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             unique_id = uuid.uuid4().hex[:8]
             filename = f"prd_{timestamp}_{unique_id}.md"
@@ -345,7 +364,6 @@ class PrdItem(BaseModel):
 
 @app.get("/prd/list", response_model=list[PrdListItem])
 def list_prds():
-    GENERATED_PRDS_DIR.mkdir(parents=True, exist_ok=True)
     return [
         PrdListItem(filename=filepath.name)
         for filepath in sorted(GENERATED_PRDS_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -374,7 +392,6 @@ async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
             await asyncio.sleep(delay)
 
         # ── Final: write file and emit complete event ──────────────────────
-        GENERATED_PRDS_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:8]
         filename = f"prd_{timestamp}_{unique_id}.md"
@@ -387,3 +404,89 @@ async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
         )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# =========================
+# FILE UPLOAD STORAGE — simple folder-based storage for uploaded documents
+# =========================
+
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+
+
+@app.post("/files/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    id: str = Form(...),
+    name: str = Form(...),
+):
+    """Upload and store file in uploads folder with validation"""
+    # Sanitize filename to prevent path traversal attacks
+    safe_name = sanitize_filename(name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    # Validate file size
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail=f"File too large. Max size is {MAX_UPLOAD_SIZE / 1024 / 1024:.0f}MB")
+    
+    # Save file
+    filepath = UPLOADS_DIR / f"{id}_{safe_name}"
+    filepath.write_bytes(contents)
+    
+    # Get upload timestamp
+    uploaded_at = datetime.now().strftime("%m/%d/%Y, %I:%M:%S %p")
+    
+    return {"status": "ok", "id": id, "uploaded_at": uploaded_at}
+
+
+class UploadedFileItem(BaseModel):
+    id: str
+    name: str
+    size: str
+    uploaded_at: str
+    file: None = None
+
+
+@app.get("/files/list", response_model=list[UploadedFileItem])
+def list_uploaded_files():
+    """Get list of all uploaded files"""
+    files = []
+    
+    if not UPLOADS_DIR.exists():
+        return files
+    
+    for filepath in sorted(UPLOADS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if filepath.is_file():
+            parts = filepath.name.split("_", 1)
+            if len(parts) == 2:
+                file_id = parts[0]
+                original_name = parts[1]
+                file_size = filepath.stat().st_size
+                # Get upload time from file modification time
+                mtime = datetime.fromtimestamp(filepath.stat().st_mtime)
+                uploaded_at = mtime.strftime("%m/%d/%Y, %I:%M:%S %p")
+                files.append(
+                    UploadedFileItem(
+                        id=file_id,
+                        name=original_name,
+                        size=f"{file_size / 1024:.1f} KB" if file_size > 0 else "0 KB",
+                        uploaded_at=uploaded_at,
+                    )
+                )
+    
+    return files
+
+
+@app.delete("/files/delete/{file_id}")
+def delete_file(file_id: str):
+    """Delete an uploaded file"""
+    if not UPLOADS_DIR.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    for filepath in UPLOADS_DIR.iterdir():
+        if filepath.name.startswith(f"{file_id}_"):
+            filepath.unlink()
+            return {"status": "deleted"}
+    
+    raise HTTPException(status_code=404, detail="File not found")
