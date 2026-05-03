@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from dummy_prd_content import DUMMY_PRD_STREAM_EVENTS, DUMMY_PRD_TEXT
 
+from utils import split_markdown_by_headings
 from backlog_generation.epic_agent import (
     JiraEpicOutput,
     JiraEpicsOutput,
@@ -357,10 +358,11 @@ async def generate_prd_sse(payload: PrdGenerateRequest):
             filename = f"prd_{timestamp}_{unique_id}.md"
             filepath = GENERATED_PRDS_DIR / filename
             filepath.write_text(prd_text)
+            prd_json = split_markdown_by_headings(prd_text)
 
             yield (
                 f"event: complete\n"
-                f"data: {json.dumps({'prd': prd_text, 'file': filename})}\n\n"
+                f"data: {json.dumps({'prd': prd_json, 'file': filename})}\n\n"
             )
         except Exception as e:
             yield (
@@ -379,7 +381,8 @@ class PrdListItem(BaseModel):
 
 class PrdItem(BaseModel):
     filename: str
-    content: str
+    content: dict
+    generated_time: float
 
 
 @app.get("/prd/list", response_model=list[PrdListItem])
@@ -395,7 +398,22 @@ def get_prd(filename: str):
     filepath = GENERATED_PRDS_DIR / filename
     if not filepath.exists() or filepath.suffix != ".md":
         raise HTTPException(status_code=404, detail=f"PRD not found: {filename}")
-    return PrdItem(filename=filepath.name, content=filepath.read_text())
+    prd_text = filepath.read_text()
+    prd_json = split_markdown_by_headings(prd_text)
+    try:
+        parts = filename.replace(".md", "").split("_")
+        if len(parts) >= 3 and parts[0] == "prd":
+            date_str = parts[1]
+            time_str = parts[2]
+            dt_str = f"{date_str} {time_str}"
+            dt = datetime.strptime(dt_str, "%Y%m%d %H%M%S")
+            generated_time = dt.timestamp()
+        else:
+            generated_time = datetime.now().timestamp()
+    except Exception:
+        generated_time = datetime.now().timestamp()
+    
+    return PrdItem(filename=filepath.name, content=prd_json, generated_time=generated_time)
 
 
 # =========================
@@ -418,9 +436,11 @@ async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
         filepath = GENERATED_PRDS_DIR / filename
         filepath.write_text(DUMMY_PRD_TEXT)
 
+        prd_json = split_markdown_by_headings(DUMMY_PRD_TEXT)
+
         yield (
             f"event: complete\n"
-            f"data: {json.dumps({'prd': DUMMY_PRD_TEXT, 'file': filename})}\n\n"
+            f"data: {json.dumps({'prd': prd_json, 'file': filename})}\n\n"
         )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

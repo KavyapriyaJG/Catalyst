@@ -1,6 +1,7 @@
 """Shared document processing utilities for chunking, embedding, and context retrieval."""
 import os
 import sys
+import re
 import io
 from pathlib import Path
 from typing import Any, List, Dict
@@ -143,3 +144,24 @@ def extract_documents_from_uploads(uploads_dir: Path, documents: list[dict]) -> 
                     break
     
     return parsed_documents
+
+def split_markdown_by_headings(md_text: str) -> dict:
+    """
+    Splits markdown text into sections by top-level headings (#).
+    Returns a dict: {heading: section_content}
+    """
+    sections = {}
+    current_heading = None
+    current_lines = []
+    for line in md_text.splitlines():
+        heading_match = re.match(r'^#\s+(.*)', line)
+        if heading_match:
+            if current_heading is not None:
+                sections[current_heading] = '\n'.join(current_lines).strip()
+            current_heading = heading_match.group(1).strip()
+            current_lines = []
+        else:
+            current_lines.append(line)
+    if current_heading is not None:
+        sections[current_heading] = '\n'.join(current_lines).strip()
+    return sections
