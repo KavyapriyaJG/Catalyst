@@ -1,7 +1,12 @@
 """Shared document processing utilities for chunking, embedding, and context retrieval."""
 import os
+import sys
+import io
+from pathlib import Path
 from typing import Any, List, Dict
 from langchain_core.documents import Document
+import PyPDF2
+from docx import Document as DocxDocument
 
 def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 200) -> List[str]:
     """Split text into overlapping chunks for embedding."""
@@ -58,6 +63,28 @@ def get_embeddings() -> Any:
     return HuggingFaceEmbeddings(model_name=local_model_path)
 
 
+def extract_document_content(filepath: Path) -> str:
+    """Extract text content from various document formats."""
+    try:
+        if filepath.suffix.lower() == ".pdf":
+            text_content = []
+            with open(filepath, "rb") as pdf_file:
+                pdf_reader = PyPDF2.PdfReader(pdf_file)
+                for page in pdf_reader.pages:
+                    text_content.append(page.extract_text())
+            return "\n".join(text_content)
+        elif filepath.suffix.lower() == ".docx":
+            doc = DocxDocument(filepath)
+            return "\n".join(paragraph.text for paragraph in doc.paragraphs)
+        else:
+            try:
+                return filepath.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                return filepath.read_text(encoding="latin-1", errors="ignore")
+    except Exception as e:
+        raise ValueError(f"Failed to extract content from {filepath.name}: {str(e)}")
+
+
 def retrieve_context(query: str, documents: List[Document], top_k: int = 6) -> str:
     """Retrieve relevant document chunks using semantic similarity search."""
     if not documents:
@@ -69,7 +96,50 @@ def retrieve_context(query: str, documents: List[Document], top_k: int = 6) -> s
             "Missing dependency 'langchain-core'. Install with: "
             "pip install langchain-core"
         ) from error
-    embeddings = get_embeddings()
-    vectorstore = InMemoryVectorStore.from_documents(documents, embeddings)
-    results = vectorstore.similarity_search(query, k=top_k)
+    
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    
+    # Create StringIO objects with isatty method to prevent errors
+    null_out = io.StringIO()
+    null_out.isatty = lambda: False
+    null_err = io.StringIO()
+    null_err.isatty = lambda: False
+    
+    try:
+        sys.stdout = null_out
+        sys.stderr = null_err
+        
+        embeddings = get_embeddings()
+        vectorstore = InMemoryVectorStore.from_documents(documents, embeddings)
+        results = vectorstore.similarity_search(query, k=top_k)
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+    
     return "\n".join([doc.page_content for doc in results])
+
+
+def extract_documents_from_uploads(uploads_dir: Path, documents: list[dict]) -> list[dict[str, str]]:
+    """Extract content from uploaded documents in the uploads directory."""
+    parsed_documents: list[dict[str, str]] = []
+    
+    for doc in documents:
+        doc_id = doc.get("id")
+        doc_name = doc.get("name")
+        if doc_id and doc_name and uploads_dir.exists():
+            found = False
+            for filepath in uploads_dir.iterdir():
+                if filepath.is_file() and filepath.name.startswith(f"{doc_id}###"):
+                    try:
+                        content = extract_document_content(filepath)
+                        parsed_documents.append({
+                            "filename": doc_name,
+                            "content": content,
+                        })
+                        found = True
+                    except Exception as e:
+                        raise ValueError(f"Failed to extract {doc_name}: {e}")
+                    break
+    
+    return parsed_documents

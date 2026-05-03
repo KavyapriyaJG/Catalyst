@@ -14,3 +14,7 @@ wheels/
 workspace
 
 models/
+
+# Generated files and uploads
+uploads/
+generated_prds/

@@ -33,6 +33,7 @@ from jira_utils import (
     jira_bulk_endpoint,
 )
 from backlog_generation.simple_langgraph import run_simple_langgraph
+from utils.document_utils import extract_documents_from_uploads
 
 # ────────────────────────────────────────────────────────────────
 # Constants & Utilities
@@ -299,10 +300,24 @@ async def generate_prd_sse(payload: PrdGenerateRequest):
 
         input_path = str(clone_dir)
 
-    if not os.path.isdir(input_path):
+    if input_path and not os.path.isdir(input_path):
         raise HTTPException(
             status_code=400, detail=f"Path does not exist: {input_path}"
         )
+
+    parsed_documents: list[dict[str, str]] = []
+    if payload.documents:
+        try:
+            parsed_documents = extract_documents_from_uploads(UPLOADS_DIR, payload.documents)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        total_content_length = sum(len(doc.get("content", "")) for doc in parsed_documents)
+        if not parsed_documents or total_content_length < 100:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Document extraction failed or insufficient content. Extracted: {total_content_length} chars from {len(parsed_documents)} documents."
+            )
 
     event_queue: queue_module.Queue[str] = queue_module.Queue()
 
@@ -311,7 +326,7 @@ async def generate_prd_sse(payload: PrdGenerateRequest):
             run_prd_pipeline(
                 input_path=input_path,
                 github_urls=payload.github_urls,
-                documents=payload.documents,
+                documents=parsed_documents,
                 event_queue=event_queue
             )
         )
@@ -425,9 +440,7 @@ async def upload_file(
     name: str = Form(...),
 ):
     """Upload and store file in uploads folder with validation"""
-    # Sanitize filename to prevent path traversal attacks
-    safe_name = sanitize_filename(name)
-    if not safe_name:
+    if not name or name.startswith('.'):
         raise HTTPException(status_code=400, detail="Invalid filename")
     
     # Validate file size
@@ -436,7 +449,7 @@ async def upload_file(
         raise HTTPException(status_code=413, detail=f"File too large. Max size is {MAX_UPLOAD_SIZE / 1024 / 1024:.0f}MB")
     
     # Save file
-    filepath = UPLOADS_DIR / f"{id}_{safe_name}"
+    filepath = UPLOADS_DIR / f"{id}###{name}"
     filepath.write_bytes(contents)
     
     # Get upload timestamp
@@ -463,12 +476,11 @@ def list_uploaded_files():
     
     for filepath in sorted(UPLOADS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
         if filepath.is_file():
-            parts = filepath.name.split("_", 1)
+            parts = filepath.name.split("###", 1)
             if len(parts) == 2:
                 file_id = parts[0]
                 original_name = parts[1]
                 file_size = filepath.stat().st_size
-                # Get upload time from file modification time
                 mtime = datetime.fromtimestamp(filepath.stat().st_mtime)
                 uploaded_at = mtime.strftime("%m/%d/%Y, %I:%M:%S %p")
                 files.append(
@@ -477,6 +489,7 @@ def list_uploaded_files():
                         name=original_name,
                         size=f"{file_size / 1024:.1f} KB" if file_size > 0 else "0 KB",
                         uploaded_at=uploaded_at,
+                        file=None
                     )
                 )
     
@@ -490,7 +503,7 @@ def delete_file(file_id: str):
         raise HTTPException(status_code=404, detail="File not found")
     
     for filepath in UPLOADS_DIR.iterdir():
-        if filepath.name.startswith(f"{file_id}_"):
+        if filepath.name.startswith(f"{file_id}###"):
             filepath.unlink()
             return {"status": "deleted"}
     

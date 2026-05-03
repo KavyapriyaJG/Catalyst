@@ -21,4 +21,6 @@ dependencies = [
     "langchain-openai>=1.2.0",
     "deepagents>=0.5.3",
     "gitpython>=3.1.46",
+    "PyPDF2>=3.0.0",
+    "python-docx>=1.0.0",
 ]
