@@ -1,12 +1,10 @@
-"""
-Shared document processing utilities for chunking, embedding, and context retrieval.
-Reusable across backlog generation, PRD generation, and other flows.
-"""
+"""Shared document processing utilities for chunking, embedding, and context retrieval."""
 import os
 from typing import Any, List, Dict
 from langchain_core.documents import Document
 
 def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 200) -> List[str]:
+    """Split text into overlapping chunks for embedding."""
     cleaned = text.strip()
     if not cleaned:
         return []
@@ -20,6 +18,7 @@ def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 200) -> List[st
     return chunks
 
 def build_documents(supporting_documents: List[Dict[str, str]]) -> List[Document]:
+    """Convert raw documents to LangChain Document objects with metadata."""
     documents: List[Document] = []
     for source_index, item in enumerate(supporting_documents, start=1):
         filename = item.get("filename", f"document-{source_index}.txt")
@@ -33,22 +32,8 @@ def build_documents(supporting_documents: List[Dict[str, str]]) -> List[Document
             )
     return documents
 
-# def get_embeddings() -> Any:
-#     try:
-#         from langchain_huggingface import HuggingFaceEmbeddings
-#     except ImportError as error:
-#         raise RuntimeError(
-#             "Missing dependency 'langchain-huggingface'. Install with: "
-#             "pip install langchain-huggingface sentence-transformers"
-#         ) from error
-#     model_name = os.getenv(
-#         "HUGGINGFACE_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
-#     ).strip()
-#     if not model_name:
-#         model_name = "sentence-transformers/all-MiniLM-L6-v2"
-#     return HuggingFaceEmbeddings(model_name=model_name)
-
 def get_embeddings() -> Any:
+    """Load or initialize HuggingFace embeddings model. Caches locally."""
     try:
         from langchain_huggingface import HuggingFaceEmbeddings
         from sentence_transformers import SentenceTransformer
@@ -63,22 +48,18 @@ def get_embeddings() -> Any:
         "sentence-transformers/all-MiniLM-L6-v2"
     ).strip() or "sentence-transformers/all-MiniLM-L6-v2"
 
-    # Define local directory inside your project
     local_model_path = os.path.join(os.getcwd(), "models", "embeddings")
-
-    # Create directory if it doesn't exist
     os.makedirs(local_model_path, exist_ok=True)
 
-    # Download and save model locally (only first time)
     if not os.listdir(local_model_path):
         model = SentenceTransformer(model_name)
         model.save(local_model_path)
 
-    # Load embeddings from local path
     return HuggingFaceEmbeddings(model_name=local_model_path)
 
 
 def retrieve_context(query: str, documents: List[Document], top_k: int = 6) -> str:
+    """Retrieve relevant document chunks using semantic similarity search."""
     if not documents:
         return ""
     try:

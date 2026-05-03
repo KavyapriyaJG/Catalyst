@@ -1,14 +1,18 @@
 import asyncio
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, Dict, Any
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from deepagents import create_deep_agent
 from langchain.tools import tool
 from langchain_anthropic import ChatAnthropic
-try:
-    from prd_generation.prompts import ANALYSIS_AGENT_PROMPT, PRD_GENERATOR_PROMPT, REVIEWER_PROMPT, RECONCILER_PROMPT
-except ImportError:
-    from prompts import ANALYSIS_AGENT_PROMPT, PRD_GENERATOR_PROMPT, REVIEWER_PROMPT, RECONCILER_PROMPT
+from prd_generation.prompts import (
+    ANALYSIS_AGENT_PROMPT,
+    COBOL_PRD_GENERATOR_PROMPT,
+    DOCUMENT_PRD_GENERATOR_PROMPT,
+    COMBINED_PRD_GENERATOR_PROMPT,
+    REVIEWER_PROMPT,
+    RECONCILER_PROMPT
+)
 
 import os
 import re
@@ -18,7 +22,7 @@ import time
 import queue as queue_module
 import logging
 from dotenv import load_dotenv
-from utils.document_utils import chunk_text, build_documents, get_embeddings, retrieve_context
+from utils.document_utils import build_documents, retrieve_context
 
 load_dotenv()
 
@@ -50,9 +54,17 @@ def extract_text(content) -> str:
 # =========================
 
 class AgentState(TypedDict):
-    input_path: str
-    files: List[str]
-    analysis: Dict[str, Any]
+    # Input routing
+    input_path: str | None  # For code analysis
+    github_urls: list[str] | None  # For code from GitHub
+    documents: list[dict] | None  # For document analysis
+    
+    # Analysis results
+    code_analysis: str | None  # Raw code analysis
+    document_analysis: str | None  # Raw document analysis
+    analysis: Dict[str, Any]  # Merged analysis (code + documents)
+    
+    # PRD generation loop
     prd: str
     review: Dict[str, Any]
     score: float
@@ -77,8 +89,6 @@ llm_claude = ChatAnthropic(
     model=os.getenv("AZURE_ANTHROPIC_DEPLOYMENT_NAME", "claude-opus-4-7"),
     anthropic_api_url=os.getenv("AZURE_ANTHROPIC_ENDPOINT"),
     anthropic_api_key=os.getenv("AZURE_ANTHROPIC_API_KEY"),
-    # thinking={"type": "adaptive", "display": "summarized"},
-    # thinking={"type": "adaptive"},
     timeout=600,
     max_retries=2
 )
@@ -175,9 +185,168 @@ def get_module_source(module_name: str) -> str:
 analysis_agent = create_deep_agent(
     model=llm_codex,
     tools=[list_modules, get_module_source],
-    system_prompt=ANALYSIS_AGENT_PROMPT,
-    # debug=True
+    system_prompt=ANALYSIS_AGENT_PROMPT
 )
+
+# =========================
+# ANALYZE CODE (COBOL - PRESERVED)
+# =========================
+
+def analyze(s: AgentState):
+    """COBOL-specific code analysis with module registry and parallel subagents.
+    This function was created through multiple iterations and should not be generalized."""
+    print("\n🔎 [Step 1/4] Analyzing COBOL source files...")
+    input_path = s['input_path']
+
+    # Step 1: Pre-read all files and group by module
+    _build_module_registry(input_path)
+
+    # Step 2: Let the deep agent analyze using task tool for subagent delegation
+    modules_list = "\n".join(f"  - {m} ({info['files']} files, {info['chars']} chars)" for m, info in sorted(_module_summary.items()))
+    print(f"   Invoking analysis agent (Codex) with {len(_module_summary)} modules...")
+    t0 = time.time()
+    result = analysis_agent.invoke({
+        "messages": [{"role": "user", "content": (
+            f"Analyze the COBOL codebase at {input_path}.\n\n"
+            f"Available modules (pre-loaded):\n{modules_list}\n\n"
+            f"CRITICAL — LAUNCH ALL SUBAGENTS IN PARALLEL:\n"
+            f"1. Call list_modules() to confirm the module list.\n"
+            f"2. Then in ONE SINGLE RESPONSE, emit ALL task tool calls at once — one per module.\n"
+            f"   This makes them run concurrently. Do NOT call them one at a time.\n"
+            f"   Each task instruction: 'Analyze module <name>. Call get_module_source(\"<name>\") to get source. "
+            f"   Extract PROGRAM-IDs, DATA DIVISION, PROCEDURE DIVISION, dependencies, business rules. Return JSON.'\n"
+            f"3. After all tasks complete, merge results into the final JSON output.\n"
+            f"4. Do NOT skip any module."
+        )}]
+    })
+    elapsed = time.time() - t0
+    print(f"   Analysis agent completed in {int(elapsed)}s")
+
+    # Extract subagent task results from message history
+    if isinstance(result, dict):
+        messages = result.get("messages", [])
+        print(f"   Analysis complete. {len(messages)} messages exchanged.")
+
+        # Extract subagent results from ToolMessages
+        subagent_results = []
+        for msg in messages:
+            if getattr(msg, 'type', None) == 'tool' and getattr(msg, 'name', None) == 'task':
+                content = extract_text(getattr(msg, 'content', ''))
+                if content and len(content) > 50:
+                    subagent_results.append(content)
+
+        # Get LLM's final merged summary
+        llm_summary = ""
+        if messages:
+            last_msg = messages[-1]
+            content = getattr(last_msg, 'content', str(last_msg))
+            llm_summary = extract_text(content)
+
+        subagent_total = sum(len(r) for r in subagent_results)
+        print(f"   Subagent results: {len(subagent_results)} modules, {subagent_total} chars total")
+        print(f"   LLM summary: {len(llm_summary)} chars")
+
+        if subagent_results:
+            combined = (
+                "=== ANALYSIS SUMMARY ===\n"
+                f"{llm_summary}\n\n"
+                "=== DETAILED MODULE ANALYSES ===\n\n"
+                + "\n\n---\n\n".join(subagent_results)
+            )
+            print(f"   Combined analysis output: {len(combined)} chars")
+            return {"code_analysis": combined}
+        else:
+            print(f"   WARNING: No subagent results found, using LLM summary only ({len(llm_summary)} chars)")
+            return {"code_analysis": llm_summary}
+
+    return {"code_analysis": str(result)}
+
+# =========================
+# ANALYZE DOCUMENTS (NEW)
+# =========================
+
+def analyze_documents(s: AgentState):
+    """Document analysis using shared utilities - semantic search and context retrieval."""
+    print("\n📄 [Step 1/4] Analyzing uploaded documents...")
+    documents = s.get('documents', [])
+    
+    if not documents:
+        print("   ⚠️  No documents provided")
+        return {"document_analysis": "No documents uploaded."}
+
+    try:
+        # Build document objects from uploaded files
+        doc_objects = build_documents(documents)
+        print(f"   Built {len(doc_objects)} document objects")
+
+        # Semantic search with multiple queries to extract insights
+        queries = [
+            "What are the main requirements and functional specifications?",
+            "What are the key processes and workflows described?",
+            "What data structures and entities are mentioned?",
+            "What are the business rules and constraints?",
+            "What are the technical specifications and dependencies?",
+            "What are the integration points and external systems?"
+        ]
+
+        insights = []
+        for q in queries:
+            try:
+                context = retrieve_context(q, doc_objects, top_k=6)
+                if context:
+                    insights.append(f"**{q}**\n{context}")
+            except Exception as e:
+                print(f"   ⚠️  Query '{q}' failed: {e}")
+
+        doc_analysis = "\n\n---\n\n".join(insights) if insights else "Unable to extract meaningful insights from documents."
+        print(f"   Document analysis complete ({len(doc_analysis)} chars)")
+        return {"document_analysis": doc_analysis}
+
+    except Exception as e:
+        print(f"   ❌ Error during document analysis: {e}")
+        return {"document_analysis": f"Error analyzing documents: {e}"}
+
+# =========================
+# MERGE ANALYSIS (NEW)
+# =========================
+
+def merge_analysis(s: AgentState):
+    """Merge code and document analyses intelligently for combined flow."""
+    print("\n🔗 [Step 1.5/4] Merging analyses...")
+    
+    code_analysis = s.get('code_analysis')
+    doc_analysis = s.get('document_analysis')
+
+    if code_analysis and doc_analysis:
+        # Both present - intelligent merge
+        merged = {
+            "source": "code_and_documents",
+            "code_insights": code_analysis[:500] + "..." if len(code_analysis) > 500 else code_analysis,
+            "document_insights": doc_analysis[:500] + "..." if len(doc_analysis) > 500 else doc_analysis,
+            "full_code_analysis": code_analysis,
+            "full_document_analysis": doc_analysis
+        }
+        print(f"   ✅ Merged both analyses (source: code_and_documents)")
+        return {"analysis": merged}
+    elif code_analysis:
+        # Code only
+        merged = {
+            "source": "code_only",
+            "analysis": code_analysis
+        }
+        print(f"   ✅ Using code analysis only (source: code_only)")
+        return {"analysis": merged}
+    elif doc_analysis:
+        # Documents only
+        merged = {
+            "source": "documents_only",
+            "analysis": doc_analysis
+        }
+        print(f"   ✅ Using document analysis only (source: documents_only)")
+        return {"analysis": merged}
+    else:
+        print(f"   ⚠️  No analysis available")
+        return {"analysis": {"source": "none", "message": "No analysis available"}}
 
 # =========================
 # FIXED PRD GENERATOR
@@ -186,7 +355,24 @@ analysis_agent = create_deep_agent(
 def generate_prd(state: AgentState):
     print("\n📝 [Step 2/4] Generating PRD from analysis...")
     print(f"   Invoking Codex {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-5.3-codex')} for PRD generation...")
-    prompt = PRD_GENERATOR_PROMPT.format(analysis=state['analysis'])
+    
+    # Select appropriate prompt based on analysis source
+    analysis_dict = state.get('analysis', {})
+    source = analysis_dict.get('source') if isinstance(analysis_dict, dict) else None
+    
+    if source == 'code_only':
+        prompt_template = COBOL_PRD_GENERATOR_PROMPT
+        print(f"   Using COBOL-specific PRD generator (code-only flow)")
+    elif source == 'documents_only':
+        prompt_template = DOCUMENT_PRD_GENERATOR_PROMPT
+        print(f"   Using document-specific PRD generator (documents-only flow)")
+    elif source == 'code_and_documents':
+        prompt_template = COMBINED_PRD_GENERATOR_PROMPT
+        print(f"   Using combined PRD generator (code + documents flow)")
+    else:
+        raise ValueError(f"Unknown analysis source: {source}. Expected 'code_only', 'documents_only', or 'code_and_documents'")
+    
+    prompt = prompt_template.format(analysis=state['analysis'])
     t0 = time.time()
     result = llm_codex.invoke(prompt)
     elapsed = time.time() - t0
@@ -282,90 +468,70 @@ def reconcile(state: AgentState):
 
 graph = StateGraph(AgentState)
 
-def analyze(s):
-    print("\n🔎 [Step 1/4] Analyzing COBOL source files...")
-    input_path = s['input_path']
 
-    # Step 1: Pre-read all files and group by module
-    _build_module_registry(input_path)
+def route_entry(s):
+    """Route entry point based on input type."""
+    has_code = bool(s.get('input_path') or s.get('github_urls'))
+    has_docs = bool(s.get('documents'))
+    
+    if has_code and has_docs:
+        return "both"
+    elif has_code:
+        return "code"
+    elif has_docs:
+        return "docs"
+    else:
+        return "error"
 
-    # Step 2: Let the deep agent analyze using task tool for subagent delegation
-    modules_list = "\n".join(f"  - {m} ({info['files']} files, {info['chars']} chars)" for m, info in sorted(_module_summary.items()))
-    print(f"   Invoking analysis agent {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-5.3-codex')} with {len(_module_summary)} modules...")
-    t0 = time.time()
-    result = analysis_agent.invoke({
-        "messages": [{"role": "user", "content": (
-            f"Analyze the COBOL codebase at {input_path}.\n\n"
-            f"Available modules (pre-loaded):\n{modules_list}\n\n"
-            f"CRITICAL — LAUNCH ALL SUBAGENTS IN PARALLEL:\n"
-            f"1. Call list_modules() to confirm the module list.\n"
-            f"2. Then in ONE SINGLE RESPONSE, emit ALL task tool calls at once — one per module.\n"
-            f"   This makes them run concurrently. Do NOT call them one at a time.\n"
-            f"   Each task instruction: 'Analyze module <name>. Call get_module_source(\"<name>\") to get source. "
-            f"   Extract PROGRAM-IDs, DATA DIVISION, PROCEDURE DIVISION, dependencies, business rules. Return JSON.'\n"
-            f"3. After all tasks complete, merge results into the final JSON output.\n"
-            f"4. Do NOT skip any module."
-        )}]
-    })
-    elapsed = time.time() - t0
-    print(f"   Analysis agent completed in {int(elapsed)}s")
 
-    # Extract subagent task results from message history (much richer than LLM's summary)
-    if isinstance(result, dict):
-        messages = result.get("messages", [])
-        print(f"   Analysis complete. {len(messages)} messages exchanged.")
+def route_after_code(s):
+    """After code analysis, check if documents also need analysis."""
+    if s.get('documents'):
+        return "docs"
+    else:
+        return "merge"
 
-        # Collect task tool_call_ids and their descriptions from AIMessages
-        task_descriptions = {}  # tool_call_id -> description
-        for msg in messages:
-            if getattr(msg, 'type', None) == 'ai' and hasattr(msg, 'tool_calls'):
-                for tc in (msg.tool_calls or []):
-                    if tc.get("name") == "task":
-                        task_descriptions[tc["id"]] = tc.get("args", {}).get("description", "")
 
-        # Extract subagent results from ToolMessages
-        subagent_results = []
-        for msg in messages:
-            if getattr(msg, 'type', None) == 'tool' and getattr(msg, 'name', None) == 'task':
-                content = extract_text(getattr(msg, 'content', ''))
-                if content and len(content) > 50:  # skip empty/error results
-                    subagent_results.append(content)
+def route_start_node(s):
+    """Entry point that just passes through - routing happens via conditional edges."""
+    return {}
 
-        # Also get the LLM's final merged summary
-        llm_summary = ""
-        if messages:
-            last_msg = messages[-1]
-            content = getattr(last_msg, 'content', str(last_msg))
-            llm_summary = extract_text(content)
 
-        subagent_total = sum(len(r) for r in subagent_results)
-        print(f"   Subagent results: {len(subagent_results)} modules, {subagent_total} chars total")
-        print(f"   LLM summary: {len(llm_summary)} chars")
-
-        if subagent_results:
-            # Combine: LLM summary (structural overview) + all raw subagent results (detail)
-            combined = (
-                "=== ANALYSIS SUMMARY ===\n"
-                f"{llm_summary}\n\n"
-                "=== DETAILED MODULE ANALYSES ===\n\n"
-                + "\n\n---\n\n".join(subagent_results)
-            )
-            print(f"   Combined analysis output: {len(combined)} chars")
-            return {"analysis": combined}
-        else:
-            print(f"   WARNING: No subagent results found, using LLM summary only ({len(llm_summary)} chars)")
-            return {"analysis": llm_summary}
-
-    return {"analysis": str(result)}
-
-graph.add_node("analyze", analyze)
-
+graph.add_node("_route_start", route_start_node)
+graph.add_node("analyze_code", analyze)
+graph.add_node("analyze_documents", analyze_documents)
+graph.add_node("merge", merge_analysis)
 graph.add_node("prd", generate_prd)
 graph.add_node("review", review_prd)
 graph.add_node("reconcile", reconcile)
 
-graph.set_entry_point("analyze")
-graph.add_edge("analyze", "prd")
+# Entry: route to code, docs, or both
+graph.set_entry_point("_route_start")
+graph.add_conditional_edges(
+    "_route_start",
+    route_entry,
+    {
+        "code": "analyze_code",
+        "docs": "analyze_documents",
+        "both": "analyze_code",
+    }
+)
+
+# After code analysis: route to docs (if present) or merge
+graph.add_conditional_edges(
+    "analyze_code",
+    route_after_code,
+    {
+        "docs": "analyze_documents",
+        "merge": "merge"
+    }
+)
+
+# After docs analysis: always merge
+graph.add_edge("analyze_documents", "merge")
+
+# After merge: generate PRD
+graph.add_edge("merge", "prd")
 graph.add_edge("prd", "review")
 
 # =========================
@@ -435,23 +601,46 @@ class _QueueLogHandler(logging.Handler):
         return
 
 
-async def run_prd_pipeline(input_path: str, event_queue: queue_module.Queue) -> str:
-    """Run the PRD pipeline, pushing progress messages to event_queue."""
+async def run_prd_pipeline(
+    input_path: str = None,
+    github_urls: list = None,
+    documents: list = None,
+    event_queue: queue_module.Queue = None
+) -> str:
+    """Run the PRD pipeline with code, documents, or both inputs.
+    
+    Args:
+        input_path: Local directory path for code analysis
+        github_urls: List of GitHub URLs for code analysis
+        documents: List of uploaded documents [{id, name, file_content}, ...]
+        event_queue: Queue for SSE streaming of progress messages
+    """
     original_stdout = sys.stdout
-    sys.stdout = _OutputCapture(event_queue, original_stdout)
+    if event_queue:
+        sys.stdout = _OutputCapture(event_queue, original_stdout)
 
-    log_handler = _QueueLogHandler(event_queue)
-    log_handler.setFormatter(logging.Formatter("%(message)s"))
-    logging.getLogger("httpx").addHandler(log_handler)
+    log_handler = _QueueLogHandler(event_queue) if event_queue else None
+    if log_handler:
+        log_handler.setFormatter(logging.Formatter("%(message)s"))
+        logging.getLogger("httpx").addHandler(log_handler)
 
     try:
-        result = await prd_pipeline.ainvoke({
+        initial_state = {
             "input_path": input_path,
-            "iteration": 0,
+            "github_urls": github_urls or [],
+            "documents": documents or [],
+            "code_analysis": None,
+            "document_analysis": None,
+            "analysis": {},
+            "prd": "",
+            "review": {},
             "score": 0,
+            "iteration": 0,
             "best_prd": "",
             "best_score": 0
-        })
+        }
+        
+        result = await prd_pipeline.ainvoke(initial_state)
 
         if result["score"] >= 80:
             prd_text = extract_text(result["prd"])
@@ -464,8 +653,10 @@ async def run_prd_pipeline(input_path: str, event_queue: queue_module.Queue) -> 
 
         return prd_text
     finally:
-        sys.stdout = original_stdout
-        logging.getLogger("httpx").removeHandler(log_handler)
+        if event_queue:
+            sys.stdout = original_stdout
+        if log_handler:
+            logging.getLogger("httpx").removeHandler(log_handler)
 
 # =========================
 # RUN
@@ -473,12 +664,20 @@ async def run_prd_pipeline(input_path: str, event_queue: queue_module.Queue) -> 
 
 async def main():
     start_time = time.time()
-    print("🚀 Starting COBOL Migration Analysis Pipeline\n")
+    print("🚀 Starting PRD Generation Pipeline\n")
+    
+    # Example with code input
     result = await prd_pipeline.ainvoke({
-        # "input_path": "/Users/kavinkumarbaskar/Downloads/testing-cobol/CobolCraft",
         "input_path": "/Users/kavinkumarbaskar/Downloads/testing-cobol/zosconnect-sample-cobol-apirequester",
-        "iteration": 0,
+        "github_urls": None,
+        "documents": None,
+        "code_analysis": None,
+        "document_analysis": None,
+        "analysis": {},
+        "prd": "",
+        "review": {},
         "score": 0,
+        "iteration": 0,
         "best_prd": "",
         "best_score": 0
     })
@@ -496,7 +695,7 @@ async def main():
             prd_text = extract_text(result["prd"])
             print(f"\n   Using final PRD (score: {result['score']}/100)")
     print("\n" + "=" * 60)
-    # print(prd_text)
+    
     with open("final_prd.md", "w") as f:
         f.write(prd_text)
     

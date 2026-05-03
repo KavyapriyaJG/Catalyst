@@ -308,7 +308,12 @@ async def generate_prd_sse(payload: PrdGenerateRequest):
 
     async def event_generator():
         pipeline_task = asyncio.create_task(
-            run_prd_pipeline(input_path, event_queue)
+            run_prd_pipeline(
+                input_path=input_path,
+                github_urls=payload.github_urls,
+                documents=payload.documents,
+                event_queue=event_queue
+            )
         )
 
         while not pipeline_task.done():
