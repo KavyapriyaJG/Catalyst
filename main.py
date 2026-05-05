@@ -409,34 +409,20 @@ def get_prd(filename: str):
 
 @app.post("/prd/generate/dummy")
 async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
-    """Dummy endpoint that replays the real /prd/generate SSE stream with artificial delays."""
+    """Dummy endpoint that streams dummy PRD data as JSON."""
 
     async def event_generator():
         for msg, delay in DUMMY_PRD_STREAM_EVENTS:
             yield f"data: {msg}\n\n"
             await asyncio.sleep(delay)
 
+        prd_json = json.loads(DUMMY_PRD_TEXT)
+        formatted_prd = format_prd_keys(prd_json)
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:8]
         filename = f"prd_{timestamp}_{unique_id}.json"
         filepath = GENERATED_PRDS_DIR / filename
-        
-        try:
-            prd_json = json.loads(DUMMY_PRD_TEXT)
-        except (json.JSONDecodeError, TypeError):
-            prd_json = {
-                "executive_summary": DUMMY_PRD_TEXT[:500],
-                "system_overview": "",
-                "functional_requirements": "",
-                "data_model": "",
-                "process_flows": "",
-                "business_rules": "",
-                "external_interfaces": "",
-                "non_functional_requirements": "",
-                "risks": ""
-            }
-        
-        formatted_prd = format_prd_keys(prd_json)
         filepath.write_text(json.dumps(formatted_prd, indent=2))
 
         yield (
