@@ -76,7 +76,10 @@ CRITICAL RULES:
 COBOL_PRD_GENERATOR_PROMPT = """
 You are a senior enterprise systems analyst and COBOL/legacy systems expert with deep expertise in translating legacy code into modern requirements.
 
-Your task is to analyze the provided COBOL code analysis and convert it into a comprehensive, enterprise-grade Product Requirements Document (PRD).
+Your task is to analyze the provided COBOL code analysis and convert it into a comprehensive, enterprise-grade Product Requirements Document (PRD) in JSON format.
+
+FROM output_formatter:
+{json_instructions}
 
 STRICT RULES:
 - Ground every finding in the COBOL analysis data provided. Do NOT hallucinate.
@@ -182,18 +185,6 @@ COBOL-SPECIFIC ANALYSIS PROCESS:
      - Year 2000 or date handling issues
    - Rate each risk: HIGH / MEDIUM / LOW with justification.
 
-OUTPUT FORMAT — Produce a structured PRD with these sections in this order:
-
-1. Executive Summary
-2. System Overview
-3. Functional Requirements (grouped by feature area)
-4. Data Model (entity definitions with COBOL-to-modern mapping table)
-5. Process Flows (end-to-end workflows with decision points)
-6. Business Rules (numbered BR-XXX, with source program traceability)
-7. External Interfaces (file formats, CALL interfaces, DB interactions)
-8. Non-Functional Requirements (quantified where possible)
-9. Risks & Limitations (rated HIGH/MEDIUM/LOW with mitigation)
-
 COBOL ANALYSIS (source of truth):
 {analysis}
 
@@ -204,7 +195,10 @@ You will be reviewed by another model. Be thorough, precise, and ensure high qua
 DOCUMENT_PRD_GENERATOR_PROMPT = """
 You are a senior requirements analyst and product manager specializing in deriving requirements from business and technical documents.
 
-Your task is to analyze the provided document analysis and convert it into a comprehensive, enterprise-grade Product Requirements Document (PRD).
+Your task is to analyze the provided document analysis and convert it into a comprehensive, enterprise-grade Product Requirements Document (PRD) in JSON format.
+
+FROM output_formatter:
+{json_instructions}
 
 DOCUMENT-SPECIFIC CONSIDERATIONS:
 - Documents may contain desired behavior, intended workflows, and business objectives.
@@ -321,18 +315,6 @@ DOCUMENT-SPECIFIC ANALYSIS PROCESS:
     - Rate clarity of each section: CLEAR / AMBIGUOUS / CONFLICTING
     - Suggest clarification needed from stakeholders.
 
-OUTPUT FORMAT — Produce a structured PRD with these sections in this order:
-
-1. Executive Summary
-2. System Overview
-3. Functional Requirements (grouped by feature area)
-4. Data Model (entities, attributes, relationships)
-5. Process Flows (workflows with decision points)
-6. Business Rules (numbered BR-XXX, with document source citations)
-7. External Interfaces (integrations, data formats, protocols)
-8. Non-Functional Requirements (performance, reliability, security, compliance)
-9. Gaps & Ambiguities (unresolved questions, conflicting statements)
-
 DOCUMENT ANALYSIS (source of truth):
 {analysis}
 
@@ -347,7 +329,12 @@ Quality standards:
 COMBINED_PRD_GENERATOR_PROMPT = """
 You are a senior enterprise architect and requirements analyst specializing in reconciling code with documented requirements.
 
-Your task is to analyze BOTH the code analysis AND document analysis and produce a comprehensive, enterprise-grade Product Requirements Document (PRD) that:
+Your task is to analyze BOTH the code analysis AND document analysis and produce a comprehensive, enterprise-grade Product Requirements Document (PRD) in JSON format.
+
+FROM output_formatter:
+{json_instructions}
+
+This document will serve as the bridge between what code currently does and what stakeholders intend it to do.
 - Captures what the code actually does (implementation reality)
 - Captures what the documents say it should do (intended behavior)
 - Identifies gaps between code and documents

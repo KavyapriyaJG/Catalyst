@@ -13,6 +13,10 @@ from prd_generation.prompts import (
     REVIEWER_PROMPT,
     RECONCILER_PROMPT
 )
+from prd_generation.output_formatter import (
+    get_json_output_format_instructions,
+    extract_json_from_response
+)
 
 import os
 import re
@@ -65,11 +69,11 @@ class AgentState(TypedDict):
     analysis: Dict[str, Any]  # Merged analysis (code + documents)
     
     # PRD generation loop
-    prd: str
+    prd: Dict[str, Any]
     review: Dict[str, Any]
     score: float
     iteration: int
-    best_prd: str
+    best_prd: Dict[str, Any]
     best_score: float
 
 # =========================
@@ -151,9 +155,9 @@ def _build_module_registry(input_path: str):
 
     print(f"   Found {total_files} files in {len(_module_registry)} modules ({total_chars} chars total)")
     if errors:
-        print(f"   ⚠️  {len(errors)} files failed to read")
+        print(f"   {len(errors)} files failed to read")
     for mod, info in sorted(_module_summary.items()):
-        print(f"     📁 {mod}: {info['files']} files, {info['chars']} chars")
+        print(f"     {mod}: {info['files']} files, {info['chars']} chars")
 
 
 @tool
@@ -193,21 +197,15 @@ analysis_agent = create_deep_agent(
 # =========================
 
 def analyze(s: AgentState):
-    """COBOL-specific code analysis with module registry and parallel subagents.
-    This function was created through multiple iterations and should not be generalized."""
-    print("\n🔎 [Step 1/4] Analyzing COBOL source files...")
-    input_path = s['input_path']
-
-    # Step 1: Pre-read all files and group by module
-    _build_module_registry(input_path)
-
-    # Step 2: Let the deep agent analyze using task tool for subagent delegation
+    """Analyze COBOL source files with module registry and parallel subagents."""
+    print("\n[Step 1/4] Analyzing COBOL source files...")
+    _build_module_registry(s['input_path'])
     modules_list = "\n".join(f"  - {m} ({info['files']} files, {info['chars']} chars)" for m, info in sorted(_module_summary.items()))
     print(f"   Invoking analysis agent (Codex) with {len(_module_summary)} modules...")
     t0 = time.time()
     result = analysis_agent.invoke({
         "messages": [{"role": "user", "content": (
-            f"Analyze the COBOL codebase at {input_path}.\n\n"
+            f"Analyze the COBOL codebase at {s['input_path']}.\n\n"
             f"Available modules (pre-loaded):\n{modules_list}\n\n"
             f"CRITICAL — LAUNCH ALL SUBAGENTS IN PARALLEL:\n"
             f"1. Call list_modules() to confirm the module list.\n"
@@ -266,20 +264,17 @@ def analyze(s: AgentState):
 # =========================
 
 def analyze_documents(s: AgentState):
-    """Document analysis using shared utilities - semantic search and context retrieval."""
-    print("\n📄 [Step 1/4] Analyzing uploaded documents...")
+    """Analyze documents using semantic search and context retrieval."""
+    print("\n[Step 1/4] Analyzing uploaded documents...")
     documents = s.get('documents', [])
     
     if not documents:
-        print("   ⚠️  No documents provided")
+        print("   No documents provided")
         return {"document_analysis": "No documents uploaded."}
 
     try:
-        # Build document objects from uploaded files
         doc_objects = build_documents(documents)
         print(f"   Built {len(doc_objects)} document objects")
-
-        # Semantic search with multiple queries to extract insights
         queries = [
             "What are the main requirements and functional specifications?",
             "What are the key processes and workflows described?",
@@ -296,14 +291,14 @@ def analyze_documents(s: AgentState):
                 if context:
                     insights.append(f"**{q}**\n{context}")
             except Exception as e:
-                print(f"   ⚠️  Query '{q}' failed: {e}")
+                print(f"   Query '{q}' failed: {e}")
 
         doc_analysis = "\n\n---\n\n".join(insights) if insights else "Unable to extract meaningful insights from documents."
         print(f"   Document analysis complete ({len(doc_analysis)} chars)")
         return {"document_analysis": doc_analysis}
 
     except Exception as e:
-        print(f"   ❌ Error during document analysis: {e}")
+        print(f"   Error during document analysis: {e}")
         return {"document_analysis": f"Error analyzing documents: {e}"}
 
 # =========================
@@ -311,14 +306,11 @@ def analyze_documents(s: AgentState):
 # =========================
 
 def merge_analysis(s: AgentState):
-    """Merge code and document analyses intelligently for combined flow."""
-    print("\n🔗 [Step 1.5/4] Merging analyses...")
-    
+    """Merge code and document analyses for combined flow."""
+    print("\n[Step 1.5/4] Merging analyses...")
     code_analysis = s.get('code_analysis')
     doc_analysis = s.get('document_analysis')
-
     if code_analysis and doc_analysis:
-        # Both present - intelligent merge
         merged = {
             "source": "code_and_documents",
             "code_insights": code_analysis[:500] + "..." if len(code_analysis) > 500 else code_analysis,
@@ -326,7 +318,7 @@ def merge_analysis(s: AgentState):
             "full_code_analysis": code_analysis,
             "full_document_analysis": doc_analysis
         }
-        print(f"   ✅ Merged both analyses (source: code_and_documents)")
+        print(f"   Merged both analyses (source: code_and_documents)")
         return {"analysis": merged}
     elif code_analysis:
         # Code only
@@ -334,7 +326,7 @@ def merge_analysis(s: AgentState):
             "source": "code_only",
             "analysis": code_analysis
         }
-        print(f"   ✅ Using code analysis only (source: code_only)")
+        print(f"   Using code analysis only (source: code_only)")
         return {"analysis": merged}
     elif doc_analysis:
         # Documents only
@@ -342,21 +334,19 @@ def merge_analysis(s: AgentState):
             "source": "documents_only",
             "analysis": doc_analysis
         }
-        print(f"   ✅ Using document analysis only (source: documents_only)")
+        print(f"   Using document analysis only (source: documents_only)")
         return {"analysis": merged}
     else:
-        print(f"   ⚠️  No analysis available")
+        print(f"   No analysis available")
         return {"analysis": {"source": "none", "message": "No analysis available"}}
 
 # =========================
-# FIXED PRD GENERATOR
+# FIXED PRD GENERATOR (JSON OUTPUT)
 # =========================
 
 def generate_prd(state: AgentState):
-    print("\n📝 [Step 2/4] Generating PRD from analysis...")
+    print("\n[Step 2/4] Generating PRD from analysis (JSON format)...")
     print(f"   Invoking Codex {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-5.3-codex')} for PRD generation...")
-    
-    # Select appropriate prompt based on analysis source
     analysis_dict = state.get('analysis', {})
     source = analysis_dict.get('source') if isinstance(analysis_dict, dict) else None
     
@@ -372,24 +362,49 @@ def generate_prd(state: AgentState):
     else:
         raise ValueError(f"Unknown analysis source: {source}. Expected 'code_only', 'documents_only', or 'code_and_documents'")
     
-    prompt = prompt_template.format(analysis=state['analysis'])
+    json_instructions = get_json_output_format_instructions()
+    prompt = prompt_template.format(
+        analysis=state['analysis'],
+        json_instructions=json_instructions
+    )
+    
     t0 = time.time()
     result = llm_codex.invoke(prompt)
     elapsed = time.time() - t0
-    prd_text = extract_text(result.content)
-    print(f"   Codex responded in {int(elapsed)}s — PRD generated ({len(prd_text)} chars)")
-    return {"prd": prd_text}
+    response_text = extract_text(result.content)
+    
+    try:
+        prd_json = extract_json_from_response(response_text)
+        print(f"   Codex responded in {int(elapsed)}s — PRD generated (JSON with {len(prd_json)} top-level fields)")
+        return {"prd": prd_json}
+    except ValueError as e:
+        print(f"   Failed to parse PRD JSON: {e}")
+        return {
+            "prd": {
+                "executive_summary": "PRD generation failed",
+                "system_overview": {},
+                "functional_requirements": {},
+                "data_model": {"entities": [], "relationships": []},
+                "process_flows": [],
+                "business_rules": [],
+                "external_interfaces": [],
+                "non_functional_requirements": {},
+                "risks_and_mitigations": []
+            }
+        }
 
 # =========================
-# REVIEWER (STRICT JSON)
+# REVIEWER (JSON PRD INPUT)
 # =========================
 
 def review_prd(state: AgentState):
-    print(f"\n🔍 [Step 3/4] Reviewing PRD (iteration {state.get('iteration', 0) + 1})...")
+    print(f"\n[Step 3/4] Reviewing PRD (iteration {state.get('iteration', 0) + 1})...")
     print(f"   Invoking Claude {os.getenv('AZURE_ANTHROPIC_DEPLOYMENT_NAME', 'claude-opus-4-7')} for PRD review...")
+    prd_json_str = json.dumps(state['prd'], indent=2) if isinstance(state['prd'], dict) else str(state['prd'])
+    
     prompt = REVIEWER_PROMPT.format(
         analysis=json.dumps(state['analysis'], indent=2) if isinstance(state['analysis'], dict) else str(state['analysis']),
-        prd=state['prd']
+        prd=prd_json_str
     )
     t0 = time.time()
     result = llm_claude.invoke(prompt)
@@ -440,25 +455,36 @@ def review_prd(state: AgentState):
     return update
 
 # =========================
-# RECONCILER
+# RECONCILER (JSON PRD PROCESSING)
 # =========================
 
 def reconcile(state: AgentState):
-    print(f"\n🔧 [Step 4/4] Reconciling PRD (iteration {state['iteration'] + 1})...")
+    print(f"\n[Step 4/4] Reconciling PRD (iteration {state['iteration'] + 1})...")
     print(f"   Invoking Codex {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-5.3-codex')} for PRD reconciliation...")
+    prd_json_str = json.dumps(state['prd'], indent=2) if isinstance(state['prd'], dict) else str(state['prd'])
     analysis_str = json.dumps(state['analysis'], indent=2) if isinstance(state['analysis'], dict) else str(state['analysis'])
+    
     prompt = RECONCILER_PROMPT.format(
-        prd=state['prd'],
+        prd=prd_json_str,
         review=json.dumps(state['review'], indent=2),
         analysis=analysis_str
     )
     t0 = time.time()
     result = llm_codex.invoke(prompt)
     elapsed = time.time() - t0
-    prd_text = extract_text(result.content)
-    print(f"   Codex responded in {int(elapsed)}s — Reconciled PRD ({len(prd_text)} chars)")
+    
+    # Extract and parse JSON response
+    response_text = extract_text(result.content)
+    
+    try:
+        prd_json = extract_json_from_response(response_text)
+        print(f"   Codex responded in {int(elapsed)}s — Reconciled PRD (JSON with {len(prd_json)} top-level fields)")
+    except ValueError as e:
+        print(f"   Failed to parse reconciled PRD JSON: {e}")
+        prd_json = state['prd']
+    
     return {
-        "prd": prd_text,
+        "prd": prd_json,
         "iteration": state["iteration"] + 1
     }
 
@@ -540,11 +566,11 @@ graph.add_edge("prd", "review")
 
 def should_continue(state: AgentState):
     if state["score"] >= 80:
-        print(f"\n✅ Done (score >= 80). Final score: {state['score']}/100")
+        print(f"\nDone (score >= 80). Final score: {state['score']}/100")
         return END
     if state["iteration"] >= 4:
         best = state.get('best_score', state['score'])
-        print(f"\n✅ Done (max iterations reached). Using best PRD with score: {best}/100")
+        print(f"\nDone (max iterations reached). Using best PRD with score: {best}/100")
         return END
     print(f"   Score {state['score']}/100 < 80, refining...")
     return "reconcile"
@@ -632,26 +658,29 @@ async def run_prd_pipeline(
             "code_analysis": None,
             "document_analysis": None,
             "analysis": {},
-            "prd": "",
+            "prd": {},
             "review": {},
             "score": 0,
             "iteration": 0,
-            "best_prd": "",
+            "best_prd": {},
             "best_score": 0
         }
         
         result = await prd_pipeline.ainvoke(initial_state)
 
         if result["score"] >= 80:
-            prd_text = extract_text(result["prd"])
+            prd_json = result["prd"]
+            print(f"\n   Using current PRD (score: {result['score']}/100)")
         else:
-            best_prd = result.get("best_prd", "")
+            best_prd = result.get("best_prd", {})
             if best_prd and result.get("best_score", 0) > result["score"]:
-                prd_text = extract_text(best_prd)
+                prd_json = best_prd
+                print(f"\n   Using best PRD from earlier iteration (score: {result['best_score']}/100 vs final: {result['score']}/100)")
             else:
-                prd_text = extract_text(result["prd"])
-
-        return prd_text
+                prd_json = result["prd"]
+                print(f"\n   Using final PRD (score: {result['score']}/100)")
+        
+        return prd_json
     finally:
         if event_queue:
             sys.stdout = original_stdout
@@ -674,30 +703,32 @@ async def main():
         "code_analysis": None,
         "document_analysis": None,
         "analysis": {},
-        "prd": "",
+        "prd": {},
         "review": {},
         "score": 0,
         "iteration": 0,
-        "best_prd": "",
+        "best_prd": {},
         "best_score": 0
     })
 
     # Use best PRD if max iterations reached without hitting 80%
     if result["score"] >= 80:
-        prd_text = extract_text(result["prd"])
+        prd_json = result["prd"]
         print(f"\n   Using current PRD (score: {result['score']}/100)")
     else:
-        best_prd = result.get("best_prd", "")
+        best_prd = result.get("best_prd", {})
         if best_prd and result.get("best_score", 0) > result["score"]:
-            prd_text = extract_text(best_prd)
+            prd_json = best_prd
             print(f"\n   Using best PRD from earlier iteration (score: {result['best_score']}/100 vs final: {result['score']}/100)")
         else:
-            prd_text = extract_text(result["prd"])
+            prd_json = result["prd"]
             print(f"\n   Using final PRD (score: {result['score']}/100)")
+    
     print("\n" + "=" * 60)
     
-    with open("final_prd.md", "w") as f:
-        f.write(prd_text)
+    # Save as JSON
+    with open("final_prd.json", "w") as f:
+        json.dump(prd_json, f, indent=2)
     
     elapsed = time.time() - start_time
     mins, secs = divmod(int(elapsed), 60)
