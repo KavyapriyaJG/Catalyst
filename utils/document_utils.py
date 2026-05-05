@@ -147,14 +147,15 @@ def extract_documents_from_uploads(uploads_dir: Path, documents: list[dict]) -> 
 
 def split_markdown_by_headings(md_text: str) -> dict:
     """
-    Splits markdown text into sections by top-level headings (#).
+    Splits markdown text into sections by any heading level (# through ######).
     Returns a dict: {heading: section_content}
     """
     sections = {}
     current_heading = None
     current_lines = []
     for line in md_text.splitlines():
-        heading_match = re.match(r'^#\s+(.*)', line)
+        # Match any heading level (1-6 #'s)
+        heading_match = re.match(r'^#{1,2}\s+(.*)', line)
         if heading_match:
             if current_heading is not None:
                 sections[current_heading] = '\n'.join(current_lines).strip()
