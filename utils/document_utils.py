@@ -8,9 +8,13 @@ from typing import Any, List, Dict
 from langchain_core.documents import Document
 import PyPDF2
 from docx import Document as DocxDocument
+from config import get_settings
 
-def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 200) -> List[str]:
+def chunk_text(text: str, chunk_size: int | None = None, overlap: int | None = None) -> List[str]:
     """Split text into overlapping chunks for embedding."""
+    s = get_settings()
+    chunk_size = chunk_size if chunk_size is not None else s.CHUNK_SIZE
+    overlap = overlap if overlap is not None else s.CHUNK_OVERLAP
     cleaned = text.strip()
     if not cleaned:
         return []
@@ -49,12 +53,9 @@ def get_embeddings() -> Any:
             "pip install langchain-huggingface sentence-transformers"
         ) from error
 
-    model_name = os.getenv(
-        "HUGGINGFACE_EMBEDDING_MODEL",
-        "sentence-transformers/all-MiniLM-L6-v2"
-    ).strip() or "sentence-transformers/all-MiniLM-L6-v2"
-
-    local_model_path = os.path.join(os.getcwd(), "models", "embeddings")
+    s = get_settings()
+    model_name = s.HUGGINGFACE_EMBEDDING_MODEL
+    local_model_path = str(s.MODELS_EMBEDDINGS_DIR)
     os.makedirs(local_model_path, exist_ok=True)
 
     if not os.listdir(local_model_path):

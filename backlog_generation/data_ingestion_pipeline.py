@@ -14,7 +14,7 @@ from backlog_generation.models import (
     IssueLinkRecord as IssueLinkORMRecord,
     IssueRecord as IssueORMRecord,
 )
-import backlog_generation.utils as utils
+from config import get_settings
 
 
 class IssueLinkUpsertRow(TypedDict):
@@ -38,14 +38,13 @@ class IssueUpsertRow(TypedDict):
 
 
 def _jira_auth_header() -> str:
-    username = utils.get_from_env("JIRA_USERNAME")
-    token = utils.get_from_env("JIRA_AUTH_TOKEN")
-    encoded = base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("utf-8")
+    s = get_settings()
+    encoded = base64.b64encode(f"{s.JIRA_USERNAME}:{s.JIRA_AUTH_TOKEN}".encode("utf-8")).decode("utf-8")
     return f"Basic {encoded}"
 
 
 def jira_base_url() -> str:
-    return utils.get_from_env("JIRA_BASE_URL").rstrip("/")
+    return get_settings().JIRA_BASE_URL.rstrip("/")
 
 
 def parse_issue_id(issue_obj: dict) -> tuple[int | None, str]:
@@ -100,7 +99,7 @@ def fetch_issues_from_jira(start_at: int, batch_size: int) -> tuple[list[IssueUp
     fields_to_include = ["parent", "subtasks", "issuelinks"]
 
     params = {
-        "jql": utils.get_from_env("JIRA_FETCH_ISSUES_JQL", "project=TEST AND created>=-365d ORDER BY created DESC"),
+        "jql": get_settings().JIRA_FETCH_ISSUES_JQL,
         "startAt": str(start_at),
         "maxResults": str(batch_size),
         "fields": ",".join(fields_to_include),
@@ -119,7 +118,7 @@ def fetch_issues_from_jira(start_at: int, batch_size: int) -> tuple[list[IssueUp
         method="GET",
     )
 
-    with urllib.request.urlopen(request, timeout=60) as response:
+    with urllib.request.urlopen(request, timeout=get_settings().JIRA_FETCH_TIMEOUT) as response:
         result = json.loads(response.read().decode("utf-8"))
 
     issues = result.get("issues", [])
@@ -225,7 +224,8 @@ def upsert_records_in_db(session: Session, records: list[IssueUpsertRow]) -> int
 
 
 def ingest_jira_issues() -> dict:
-    batch_size = int(utils.get_from_env("JIRA_BATCH_SIZE", 50))
+    s = get_settings()
+    batch_size = s.JIRA_BATCH_SIZE
     table_name = IssueORMRecord.__tablename__
 
     inserted_or_updated = 0
@@ -238,7 +238,7 @@ def ingest_jira_issues() -> dict:
     with get_session() as session:
 
         has_more = True
-        batches_to_be_processed = int(utils.get_from_env("JIRA_BATCHES_TO_BE_PROCESSED_COUNT", 10))
+        batches_to_be_processed = s.JIRA_BATCHES_TO_BE_PROCESSED_COUNT
         print(f"Processing up to {batches_to_be_processed} batches of issues with batch size {batch_size}...")
 
         while has_more and (batch_count < batches_to_be_processed):

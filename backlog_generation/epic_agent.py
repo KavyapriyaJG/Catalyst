@@ -11,6 +11,7 @@ from utils.document_utils import chunk_text, build_documents, get_embeddings, re
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field
 from .prompt import EPIC_SYSTEM_PROMPT, STORIES_SYSTEM_PROMPT
+from config import get_settings
 
 load_dotenv()
 
@@ -66,12 +67,10 @@ TModel = TypeVar("TModel", bound=BaseModel)
 
 
 def _get_llm() -> ChatGroq:
-    groq_api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not groq_api_key:
+    s = get_settings()
+    if not s.GROQ_API_KEY:
         raise ValueError("Missing GROQ_API_KEY environment variable.")
-
-    model_name = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip()
-    return ChatGroq(model=model_name, api_key=groq_api_key, temperature=0.2)
+    return ChatGroq(model=s.GROQ_MODEL, api_key=s.GROQ_API_KEY, temperature=0.2)
 
 
 
@@ -133,7 +132,7 @@ def generate_jira_epics(
     if not clean_prompt:
         raise ValueError("Prompt cannot be empty.")
 
-    safe_epic_count = max(1, min(epic_count, 10))
+    safe_epic_count = max(1, min(epic_count, get_settings().MAX_EPICS))
 
     user_message = (
         "Generate a list of Jira epics in structured JSON format.\n\n"
@@ -211,7 +210,7 @@ def generate_stories_from_epic(
     if not epic_payload:
         raise ValueError("Epic payload cannot be empty.")
 
-    safe_story_count = max(1, min(story_count, 20))
+    safe_story_count = max(1, min(story_count, get_settings().MAX_STORIES))
 
     epic_id = str(epic_payload.get("epic_id", "")).strip()
     if not epic_id:

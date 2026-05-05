@@ -1,12 +1,12 @@
 import base64
 import json
-import os
 import urllib.parse
 import urllib.request
 from dotenv import load_dotenv
 
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
+from config import get_settings
 
 load_dotenv()
 
@@ -38,16 +38,12 @@ def _empty_issue_state() -> IssueState:
 
 
 def _get_jira_config() -> tuple[str, str, str]:
-    jira_base_url = os.getenv("JIRA_BASE_URL", "")
-    jira_username = os.getenv("JIRA_USERNAME", "")
-    jira_auth_token = os.getenv("JIRA_AUTH_TOKEN", "")
-
-    if not jira_base_url or not jira_username or not jira_auth_token:
+    s = get_settings()
+    if not s.JIRA_BASE_URL or not s.JIRA_USERNAME or not s.JIRA_AUTH_TOKEN:
         raise ValueError(
             "Missing Jira credentials. Set JIRA_BASE_URL, JIRA_USERNAME, JIRA_AUTH_TOKEN."
         )
-
-    return jira_base_url, jira_username, jira_auth_token
+    return s.JIRA_BASE_URL, s.JIRA_USERNAME, s.JIRA_AUTH_TOKEN
 
 
 def _basic_auth_value(username: str, token: str) -> str:
@@ -69,7 +65,7 @@ def _fetch_jira_issue(issue_id: str) -> dict:
         method="GET",
     )
 
-    with urllib.request.urlopen(request, timeout=20) as response:
+    with urllib.request.urlopen(request, timeout=get_settings().JIRA_ISSUE_FETCH_TIMEOUT) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -93,14 +89,13 @@ def _extract_issue_state(issue_payload: dict) -> IssueState:
 
 
 def _answer_with_chatgroq(question: str, issue_context: IssueState) -> str:
-    groq_api_key = os.getenv("GROQ_API_KEY", "")
-    if not groq_api_key:
+    s = get_settings()
+    if not s.GROQ_API_KEY:
         raise ValueError("Missing GROQ_API_KEY environment variable.")
 
     from langchain_groq import ChatGroq
 
-    model_name = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-    llm = ChatGroq(model=model_name, api_key=groq_api_key, temperature=0)
+    llm = ChatGroq(model=s.GROQ_MODEL, api_key=s.GROQ_API_KEY, temperature=0)
 
     context_json = json.dumps(issue_context)
     prompt = (
@@ -176,7 +171,7 @@ def generate_graph_diagram(graph):
         f.write(image_data)
 
 
-def run_simple_langgraph(message: str, issue_id: str) -> str:
+def run_jira_qa_workflow(message: str, issue_id: str) -> str:
     graph = build_simple_graph()
     result = graph.invoke(
         {

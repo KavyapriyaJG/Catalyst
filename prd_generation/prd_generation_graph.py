@@ -27,6 +27,7 @@ import queue as queue_module
 import logging
 from dotenv import load_dotenv
 from utils.document_utils import build_documents, retrieve_context
+from config import get_settings
 
 load_dotenv()
 
@@ -81,20 +82,20 @@ class AgentState(TypedDict):
 # =========================
 
 llm_codex = ChatOpenAI(
-    model=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-5.3-codex"),
-    base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
-    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-    timeout=600,
-    max_retries=2,
+    model=get_settings().AZURE_OPENAI_DEPLOYMENT_NAME,
+    base_url=get_settings().AZURE_OPENAI_ENDPOINT,
+    api_key=get_settings().AZURE_OPENAI_API_KEY,
+    timeout=get_settings().LLM_TIMEOUT,
+    max_retries=get_settings().LLM_MAX_RETRIES,
     temperature=0
 )
 
 llm_claude = ChatAnthropic(
-    model=os.getenv("AZURE_ANTHROPIC_DEPLOYMENT_NAME", "claude-opus-4-7"),
-    anthropic_api_url=os.getenv("AZURE_ANTHROPIC_ENDPOINT"),
-    anthropic_api_key=os.getenv("AZURE_ANTHROPIC_API_KEY"),
-    timeout=600,
-    max_retries=2
+    model=get_settings().AZURE_ANTHROPIC_DEPLOYMENT_NAME,
+    anthropic_api_url=get_settings().AZURE_ANTHROPIC_ENDPOINT,
+    anthropic_api_key=get_settings().AZURE_ANTHROPIC_API_KEY,
+    timeout=get_settings().LLM_TIMEOUT,
+    max_retries=get_settings().LLM_MAX_RETRIES
 )
 
 
@@ -111,12 +112,14 @@ def _build_module_registry(input_path: str):
     """Pre-read all COBOL files and group by top-level module directory."""
     global _module_registry, _module_summary
 
-    cobol_extensions = {'.cob', '.cbl', '.cpy'}
-    other_names = {'Makefile', 'Dockerfile'}
+    s = get_settings()
+    cobol_extensions = s.COBOL_EXTENSIONS
+    other_names = s.SCAN_OTHER_NAMES
+    excluded_dirs = s.SCAN_EXCLUDED_DIRS
     module_files: Dict[str, list] = {}
 
     for root, dirs, files in os.walk(input_path):
-        dirs[:] = [d for d in dirs if d not in ('.git', '.github', 'node_modules')]
+        dirs[:] = [d for d in dirs if d not in excluded_dirs]
         for f in sorted(files):
             full = os.path.join(root, f)
             is_cobol = any(f.endswith(ext) for ext in cobol_extensions)
@@ -287,7 +290,7 @@ def analyze_documents(s: AgentState):
         insights = []
         for q in queries:
             try:
-                context = retrieve_context(q, doc_objects, top_k=6)
+                context = retrieve_context(q, doc_objects, top_k=get_settings().SEMANTIC_TOP_K)
                 if context:
                     insights.append(f"**{q}**\n{context}")
             except Exception as e:
@@ -345,8 +348,8 @@ def merge_analysis(s: AgentState):
 # =========================
 
 def generate_prd(state: AgentState):
-    print("\n[Step 2/4] Generating PRD from analysis (JSON format)...")
-    print(f"   Invoking Codex {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-5.3-codex')} for PRD generation...")
+    print(f"\n[Step 2/4] Generating PRD from analysis (JSON format)...")
+    print(f"   Invoking Codex {get_settings().AZURE_OPENAI_DEPLOYMENT_NAME} for PRD generation...")
     analysis_dict = state.get('analysis', {})
     source = analysis_dict.get('source') if isinstance(analysis_dict, dict) else None
     
@@ -399,7 +402,7 @@ def generate_prd(state: AgentState):
 
 def review_prd(state: AgentState):
     print(f"\n[Step 3/4] Reviewing PRD (iteration {state.get('iteration', 0) + 1})...")
-    print(f"   Invoking Claude {os.getenv('AZURE_ANTHROPIC_DEPLOYMENT_NAME', 'claude-opus-4-7')} for PRD review...")
+    print(f"   Invoking Claude {get_settings().AZURE_ANTHROPIC_DEPLOYMENT_NAME} for PRD review...")
     prd_json_str = json.dumps(state['prd'], indent=2) if isinstance(state['prd'], dict) else str(state['prd'])
     
     prompt = REVIEWER_PROMPT.format(
@@ -460,7 +463,7 @@ def review_prd(state: AgentState):
 
 def reconcile(state: AgentState):
     print(f"\n[Step 4/4] Reconciling PRD (iteration {state['iteration'] + 1})...")
-    print(f"   Invoking Codex {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-5.3-codex')} for PRD reconciliation...")
+    print(f"   Invoking Codex {get_settings().AZURE_OPENAI_DEPLOYMENT_NAME} for PRD reconciliation...")
     prd_json_str = json.dumps(state['prd'], indent=2) if isinstance(state['prd'], dict) else str(state['prd'])
     analysis_str = json.dumps(state['analysis'], indent=2) if isinstance(state['analysis'], dict) else str(state['analysis'])
     
@@ -565,10 +568,10 @@ graph.add_edge("prd", "review")
 # =========================
 
 def should_continue(state: AgentState):
-    if state["score"] >= 80:
-        print(f"\nDone (score >= 80). Final score: {state['score']}/100")
+    if state["score"] >= get_settings().PRD_SCORE_THRESHOLD:
+        print(f"\nDone (score >= {get_settings().PRD_SCORE_THRESHOLD}). Final score: {state['score']}/100")
         return END
-    if state["iteration"] >= 4:
+    if state["iteration"] >= get_settings().PRD_MAX_ITERATIONS:
         best = state.get('best_score', state['score'])
         print(f"\nDone (max iterations reached). Using best PRD with score: {best}/100")
         return END

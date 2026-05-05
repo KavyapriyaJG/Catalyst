@@ -1,26 +1,20 @@
 import base64
-import os
 import re
 from collections.abc import Iterable
 from typing import Any
 
 from backlog_generation.epic_agent import JiraEpicOutput, JiraStoriesOutput, JiraStoryOutput
-import backlog_generation.utils as utils
+from config import get_settings
 
 
 def jira_bulk_endpoint() -> str:
-    configured_endpoint = os.getenv("JIRA_BULK_ISSUES_ENDPOINT", "").strip()
-    if configured_endpoint:
-        return configured_endpoint
-
-    jira_base_url = utils.get_from_env("JIRA_BASE_URL").rstrip("/")
-    return f"{jira_base_url}/rest/api/3/issue/bulk"
+    s = get_settings()
+    return s.JIRA_BULK_ISSUES_ENDPOINT
 
 
 def jira_auth_header() -> str:
-    username = utils.get_from_env("JIRA_USERNAME")
-    token = utils.get_from_env("JIRA_AUTH_TOKEN")
-    auth_value = base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("utf-8")
+    s = get_settings()
+    auth_value = base64.b64encode(f"{s.JIRA_USERNAME}:{s.JIRA_AUTH_TOKEN}".encode("utf-8")).decode("utf-8")
     return f"Basic {auth_value}"
 
 
@@ -105,9 +99,10 @@ def _normalize_label(label: str) -> str:
 
 
 def _build_epic_labels(epic: JiraEpicOutput) -> list[str]:
+    s = get_settings()
     configured_labels = [
         _normalize_label(label)
-        for label in os.getenv("JIRA_DEFAULT_LABELS", "").split(",")
+        for label in s.JIRA_DEFAULT_LABELS.split(",")
         if _normalize_label(label)
     ]
     derived_label = _normalize_label(epic.epic_name)
@@ -121,15 +116,16 @@ def _build_epic_labels(epic: JiraEpicOutput) -> list[str]:
 
 
 def _resolve_priority_id(priority_label: str | None = None) -> str:
-    default_priority_id = os.getenv("JIRA_DEFAULT_PRIORITY_ID", "3").strip() or "3"
+    s = get_settings()
+    default_priority_id = s.JIRA_DEFAULT_PRIORITY_ID or "3"
     normalized_priority = (priority_label or "").strip().lower()
 
     priority_map = {
-        "highest": os.getenv("JIRA_PRIORITY_HIGHEST_ID", "").strip(),
-        "high": os.getenv("JIRA_PRIORITY_HIGH_ID", "").strip(),
-        "medium": os.getenv("JIRA_PRIORITY_MEDIUM_ID", "").strip(),
-        "low": os.getenv("JIRA_PRIORITY_LOW_ID", "").strip(),
-        "lowest": os.getenv("JIRA_PRIORITY_LOWEST_ID", "").strip(),
+        "highest": s.JIRA_PRIORITY_HIGHEST_ID,
+        "high": s.JIRA_PRIORITY_HIGH_ID,
+        "medium": s.JIRA_PRIORITY_MEDIUM_ID,
+        "low": s.JIRA_PRIORITY_LOW_ID,
+        "lowest": s.JIRA_PRIORITY_LOWEST_ID,
     }
     mapped_priority = priority_map.get(normalized_priority, "")
 
@@ -137,9 +133,10 @@ def _resolve_priority_id(priority_label: str | None = None) -> str:
 
 
 def _build_story_labels(story: JiraStoryOutput, fallback_epic_id: str) -> list[str]:
+    s = get_settings()
     configured_labels = [
         _normalize_label(label)
-        for label in os.getenv("JIRA_STORY_DEFAULT_LABELS", os.getenv("JIRA_DEFAULT_LABELS", "")).split(",")
+        for label in s.JIRA_STORY_DEFAULT_LABELS.split(",")
         if _normalize_label(label)
     ]
 
@@ -189,10 +186,11 @@ def _build_story_description(story: JiraStoryOutput, fallback_epic_id: str) -> d
 def build_jira_bulk_epics_payload(
     epics: Iterable[JiraEpicOutput | dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    project_id = utils.get_from_env("JIRA_PROJECT_ID")
+    s = get_settings()
+    project_id = s.JIRA_PROJECT_ID
     priority_id = _resolve_priority_id()
-    issue_type_name = os.getenv("JIRA_EPIC_ISSUE_TYPE", "Epic").strip() or "Epic"
-    epic_name_field = os.getenv("JIRA_EPIC_NAME_FIELD", "").strip()
+    issue_type_name = s.JIRA_EPIC_ISSUE_TYPE or "Epic"
+    epic_name_field = s.JIRA_EPIC_NAME_FIELD
 
     issue_updates: list[dict[str, Any]] = []
 
@@ -220,9 +218,10 @@ def build_jira_bulk_story_payload(
     stories_payload: JiraStoriesOutput | dict[str, Any],
     parent_key: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    project_id = utils.get_from_env("JIRA_PROJECT_ID")
-    issue_type_name = os.getenv("JIRA_STORY_ISSUE_TYPE", "Story").strip() or "Story"
-    story_parent_field = os.getenv("JIRA_STORY_PARENT_FIELD", "").strip()
+    s = get_settings()
+    project_id = s.JIRA_PROJECT_ID
+    issue_type_name = s.JIRA_STORY_ISSUE_TYPE or "Story"
+    story_parent_field = s.JIRA_STORY_PARENT_FIELD
 
     validated_stories_payload = (
         stories_payload
@@ -260,3 +259,5 @@ def build_jira_bulk_story_payload(
         issue_updates.append({"fields": fields})
 
     return {"issueUpdates": issue_updates}
+
+

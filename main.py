@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from dummy_prd_content import DUMMY_PRD_STREAM_EVENTS, DUMMY_PRD_TEXT
 
+from config import get_settings
 from utils import split_markdown_by_headings
 from backlog_generation.epic_agent import (
     JiraEpicOutput,
@@ -27,13 +28,13 @@ from backlog_generation.epic_agent import (
     generate_jira_epics,
     generate_stories_from_epic,
 )
-from jira_utils import (
+from backlog_generation.utils.jira_utils import (
     build_jira_bulk_epics_payload,
     build_jira_bulk_story_payload,
     jira_auth_header,
     jira_bulk_endpoint,
 )
-from backlog_generation.simple_langgraph import run_simple_langgraph
+from backlog_generation.jira_qa_workflow import run_jira_qa_workflow
 from utils.document_utils import extract_documents_from_uploads
 
 # ────────────────────────────────────────────────────────────────
@@ -42,9 +43,10 @@ from utils.document_utils import extract_documents_from_uploads
 
 app = FastAPI()
 
-WORKSPACE_DIR = Path(__file__).parent / "workspace"
-GENERATED_PRDS_DIR = Path(__file__).parent / "generated_prds"
-UPLOADS_DIR = Path(__file__).parent / "uploads"
+_settings = get_settings()
+WORKSPACE_DIR = _settings.WORKSPACE_DIR
+GENERATED_PRDS_DIR = _settings.GENERATED_PRDS_DIR
+UPLOADS_DIR = _settings.UPLOADS_DIR
 
 # Ensure directories exist on startup
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -61,16 +63,9 @@ def sanitize_filename(filename: str) -> str:
     safe = safe[:255]
     return safe or "file"
 
-allowed_origins = [
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-    "http://localhost:8081",
-    "http://127.0.0.1:8081",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=_settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -105,7 +100,7 @@ class JiraBulkPublishResponse(BaseModel):
 
 
 def generate_agent_response(message: str, issue_id: str) -> str:
-    return run_simple_langgraph(message, issue_id)
+    return run_jira_qa_workflow(message, issue_id)
 
 
 @app.get("/")
@@ -223,7 +218,7 @@ def publish_issues_to_jira(
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=_settings.JIRA_FETCH_TIMEOUT) as response:
             jira_response = json.loads(response.read().decode("utf-8"))
     except ValueError as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
@@ -447,11 +442,8 @@ async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
 
 
 # =========================
-# FILE UPLOAD STORAGE — simple folder-based storage for uploaded documents
+# Temporary FILE UPLOAD STORAGE — simple folder-based storage for uploaded documents
 # =========================
-
-MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
-
 
 @app.post("/files/upload")
 async def upload_file(
@@ -465,8 +457,8 @@ async def upload_file(
     
     # Validate file size
     contents = await file.read()
-    if len(contents) > MAX_UPLOAD_SIZE:
-        raise HTTPException(status_code=413, detail=f"File too large. Max size is {MAX_UPLOAD_SIZE / 1024 / 1024:.0f}MB")
+    if len(contents) > _settings.max_upload_size_bytes:
+        raise HTTPException(status_code=413, detail=f"File too large. Max size is {_settings.MAX_UPLOAD_SIZE_MB}MB")
     
     # Save file
     filepath = UPLOADS_DIR / f"{id}###{name}"

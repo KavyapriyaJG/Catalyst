@@ -5,18 +5,24 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-import backlog_generation.utils as utils
+from config import get_settings
 
 
 def get_echo_setting() -> bool | str:
-    value = utils.get_from_env("ORM_ECHO_SQL", "false").strip().lower()
-    if value == "debug":
+    value = get_settings().model_config.get("env_file", "")
+    # Read ORM_ECHO_SQL directly since it's not in Settings yet
+    import os
+    raw = os.getenv("ORM_ECHO_SQL", "false").strip().lower()
+    if raw == "debug":
         return "debug"
-    return value in {"1", "true", "yes", "on"}
+    return raw in {"1", "true", "yes", "on"}
 
 
 def get_database_url() -> str:
-    postgres_dsn = utils.get_from_env("POSTGRES_DSN")
+    import os
+    postgres_dsn = os.getenv("POSTGRES_DSN", "").strip()
+    if not postgres_dsn:
+        raise ValueError("Missing required environment variable: POSTGRES_DSN")
     if postgres_dsn.startswith("postgresql://"):
         return postgres_dsn.replace("postgresql://", "postgresql+psycopg://", 1)
     return postgres_dsn
