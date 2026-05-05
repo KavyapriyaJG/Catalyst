@@ -344,7 +344,7 @@ def merge_analysis(s: AgentState):
         return {"analysis": {"source": "none", "message": "No analysis available"}}
 
 # =========================
-# FIXED PRD GENERATOR (JSON OUTPUT)
+# PRD GENERATOR
 # =========================
 
 def generate_prd(state: AgentState):
@@ -385,14 +385,14 @@ def generate_prd(state: AgentState):
         return {
             "prd": {
                 "executive_summary": "PRD generation failed",
-                "system_overview": {},
-                "functional_requirements": {},
-                "data_model": {"entities": [], "relationships": []},
-                "process_flows": [],
-                "business_rules": [],
-                "external_interfaces": [],
-                "non_functional_requirements": {},
-                "risks_and_mitigations": []
+                "system_overview": "",
+                "functional_requirements": "",
+                "data_model": "",
+                "process_flows": "",
+                "business_rules": "",
+                "external_interfaces": "",
+                "non_functional_requirements": "",
+                "risks": ""
             }
         }
 
@@ -467,10 +467,12 @@ def reconcile(state: AgentState):
     prd_json_str = json.dumps(state['prd'], indent=2) if isinstance(state['prd'], dict) else str(state['prd'])
     analysis_str = json.dumps(state['analysis'], indent=2) if isinstance(state['analysis'], dict) else str(state['analysis'])
     
+    json_instructions = get_json_output_format_instructions()
     prompt = RECONCILER_PROMPT.format(
         prd=prd_json_str,
         review=json.dumps(state['review'], indent=2),
-        analysis=analysis_str
+        analysis=analysis_str,
+        json_instructions=json_instructions
     )
     t0 = time.time()
     result = llm_codex.invoke(prompt)
@@ -635,7 +637,7 @@ async def run_prd_pipeline(
     github_urls: list = None,
     documents: list = None,
     event_queue: queue_module.Queue = None
-) -> str:
+) -> Dict[str, Any]:
     """Run the PRD pipeline with code, documents, or both inputs.
     
     Args:

@@ -20,7 +20,6 @@ from pydantic import BaseModel, Field
 from dummy_prd_content import DUMMY_PRD_STREAM_EVENTS, DUMMY_PRD_TEXT
 
 from config import get_settings
-from utils import split_markdown_by_headings
 from backlog_generation.epic_agent import (
     JiraEpicOutput,
     JiraEpicsOutput,
@@ -53,15 +52,9 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_PRDS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def sanitize_filename(filename: str) -> str:
-    """Remove/replace unsafe characters from filename"""
-    # Keep only alphanumeric, dots, hyphens, underscores
-    safe = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
-    # Remove leading/trailing dots and slashes
-    safe = safe.strip('._/\\')
-    # Limit length to 255 chars (filesystem limit)
-    safe = safe[:255]
-    return safe or "file"
+def format_prd_keys(prd_dict: dict) -> dict:
+    """Convert snake_case keys to Title Case with spaces."""
+    return {key.replace('_', ' ').title(): value for key, value in prd_dict.items()}
 
 app.add_middleware(
     CORSMiddleware,
@@ -346,18 +339,18 @@ async def generate_prd_sse(payload: PrdGenerateRequest):
 
         # Emit final result or error
         try:
-            prd_text = pipeline_task.result()
+            prd_json = pipeline_task.result()
+            formatted_prd = format_prd_keys(prd_json)
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             unique_id = uuid.uuid4().hex[:8]
-            filename = f"prd_{timestamp}_{unique_id}.md"
+            filename = f"prd_{timestamp}_{unique_id}.json"
             filepath = GENERATED_PRDS_DIR / filename
-            filepath.write_text(prd_text)
-            prd_json = split_markdown_by_headings(prd_text)
+            filepath.write_text(json.dumps(formatted_prd, indent=2))
 
             yield (
                 f"event: complete\n"
-                f"data: {json.dumps({'prd': prd_json, 'file': filename})}\n\n"
+                f"data: {json.dumps({'prd': formatted_prd, 'file': filename})}\n\n"
             )
         except Exception as e:
             yield (
@@ -384,17 +377,16 @@ class PrdItem(BaseModel):
 def list_prds():
     return [
         PrdListItem(filename=filepath.name)
-        for filepath in sorted(GENERATED_PRDS_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for filepath in sorted(GENERATED_PRDS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     ]
 
 
 @app.get("/prd/{filename}", response_model=PrdItem)
 def get_prd(filename: str):
     filepath = GENERATED_PRDS_DIR / filename
-    if not filepath.exists() or filepath.suffix != ".md":
+    if not filepath.exists() or filepath.suffix != ".json":
         raise HTTPException(status_code=404, detail=f"PRD not found: {filename}")
-    prd_text = filepath.read_text()
-    prd_json = split_markdown_by_headings(prd_text)
+    prd_json = json.loads(filepath.read_text())
     try:
         parts = filename.replace(".md", "").split("_")
         if len(parts) >= 3 and parts[0] == "prd":
@@ -408,7 +400,7 @@ def get_prd(filename: str):
     except Exception:
         generated_time = datetime.now().timestamp()
     
-    return PrdItem(filename=filepath.name, content=prd_json, generated_time=generated_time)
+    return PrdItem(filename=filepath.name, content=format_prd_keys(prd_json), generated_time=generated_time)
 
 
 # =========================
@@ -424,18 +416,32 @@ async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
             yield f"data: {msg}\n\n"
             await asyncio.sleep(delay)
 
-        # ── Final: write file and emit complete event ──────────────────────
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:8]
-        filename = f"prd_{timestamp}_{unique_id}.md"
+        filename = f"prd_{timestamp}_{unique_id}.json"
         filepath = GENERATED_PRDS_DIR / filename
-        filepath.write_text(DUMMY_PRD_TEXT)
-
-        prd_json = split_markdown_by_headings(DUMMY_PRD_TEXT)
+        
+        try:
+            prd_json = json.loads(DUMMY_PRD_TEXT)
+        except (json.JSONDecodeError, TypeError):
+            prd_json = {
+                "executive_summary": DUMMY_PRD_TEXT[:500],
+                "system_overview": "",
+                "functional_requirements": "",
+                "data_model": "",
+                "process_flows": "",
+                "business_rules": "",
+                "external_interfaces": "",
+                "non_functional_requirements": "",
+                "risks": ""
+            }
+        
+        formatted_prd = format_prd_keys(prd_json)
+        filepath.write_text(json.dumps(formatted_prd, indent=2))
 
         yield (
             f"event: complete\n"
-            f"data: {json.dumps({'prd': prd_json, 'file': filename})}\n\n"
+            f"data: {json.dumps({'prd': formatted_prd, 'file': filename})}\n\n"
         )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

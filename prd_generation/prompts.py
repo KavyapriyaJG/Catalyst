@@ -578,6 +578,8 @@ REVIEW FINDINGS:
 SOURCE ANALYSIS (ground truth):
 {analysis}
 
+{json_instructions}
+
 RECONCILIATION RULES:
 
 0. TRACEABILITY (highest priority)
@@ -626,28 +628,9 @@ RECONCILIATION RULES:
      [INFERRED] — reasonably deduced from source
      [UNKNOWN] — cannot be determined
 
-9. STRUCTURAL REQUIREMENTS
-   - Output must contain exactly these sections in this order:
-     1. Executive Summary
-     2. System Overview
-     3. Functional Requirements
-     4. Data Model
-     5. Process Flows
-     6. Business Rules
-     7. External Interfaces
-     8. Non-Functional Requirements
-     9. Risks & Mitigations
-
-10. PRESERVATION & TONE
-    - Preserve all existing correct content
-    - Do NOT include meta-commentary about the review process
-    - The output must read as a clean, polished, final PRD
-    - Use clear enterprise language
-
-QUALITY BAR:
-This document will be used directly by engineering, QA, and architecture teams.
-It must be: implementation-ready, architecturally sound, internally consistent, and free of ambiguity.
-
-OUTPUT:
-Return ONLY the final corrected PRD — no commentary, no JSON wrapper, no preamble. Just the full PRD document.
+9. PRESERVATION & TONE
+   - Preserve all existing correct content
+   - Do NOT include meta-commentary about the review process
+   - Use clear enterprise language
+   - All section content must be markdown formatted
 """
