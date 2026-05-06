@@ -1,4 +1,3 @@
-import base64
 import json
 import urllib.parse
 import urllib.request
@@ -6,6 +5,7 @@ from dotenv import load_dotenv
 
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
+from backlog_generation.jira.auth import jira_auth_header, validate_jira_credentials
 from config import get_settings
 
 load_dotenv()
@@ -37,29 +37,15 @@ def _empty_issue_state() -> IssueState:
     )
 
 
-def _get_jira_config() -> tuple[str, str, str]:
-    s = get_settings()
-    if not s.JIRA_BASE_URL or not s.JIRA_USERNAME or not s.JIRA_AUTH_TOKEN:
-        raise ValueError(
-            "Missing Jira credentials. Set JIRA_BASE_URL, JIRA_USERNAME, JIRA_AUTH_TOKEN."
-        )
-    return s.JIRA_BASE_URL, s.JIRA_USERNAME, s.JIRA_AUTH_TOKEN
-
-
-def _basic_auth_value(username: str, token: str) -> str:
-    return base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("utf-8")
-
-
 def _fetch_jira_issue(issue_id: str) -> dict:
-    jira_base_url, jira_username, jira_auth_token = _get_jira_config()
+    jira_base_url, _, __ = validate_jira_credentials()
     issue_key = urllib.parse.quote(issue_id, safe="")
     fields = urllib.parse.quote("summary,assignee,status,creator,reporter", safe=",")
     endpoint = f"{jira_base_url.rstrip('/')}/rest/api/3/issue/{issue_key}?fields={fields}"
-    auth_value = _basic_auth_value(jira_username, jira_auth_token)
     request = urllib.request.Request(
         endpoint,
         headers={
-            "Authorization": f"Basic {auth_value}",
+            "Authorization": jira_auth_header(),
             "Accept": "application/json",
         },
         method="GET",

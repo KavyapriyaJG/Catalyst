@@ -1,4 +1,3 @@
-import base64
 import json
 import urllib.parse
 import urllib.request
@@ -14,6 +13,7 @@ from backlog_generation.models import (
     IssueLinkRecord as IssueLinkORMRecord,
     IssueRecord as IssueORMRecord,
 )
+from backlog_generation.jira.auth import jira_auth_header
 from config import get_settings
 
 
@@ -35,12 +35,6 @@ class IssueUpsertRow(TypedDict):
     parent_issue_key: NotRequired[str]
     issue_links: NotRequired[list[IssueLinkUpsertRow]]
     linked_issue_rows: NotRequired[list[LinkedIssueRow]]
-
-
-def _jira_auth_header() -> str:
-    s = get_settings()
-    encoded = base64.b64encode(f"{s.JIRA_USERNAME}:{s.JIRA_AUTH_TOKEN}".encode("utf-8")).decode("utf-8")
-    return f"Basic {encoded}"
 
 
 def jira_base_url() -> str:
@@ -112,7 +106,7 @@ def fetch_issues_from_jira(start_at: int, batch_size: int) -> tuple[list[IssueUp
     request = urllib.request.Request(
         url,
         headers={
-            "Authorization": _jira_auth_header(),
+            "Authorization": jira_auth_header(),
             "Accept": "application/json",
         },
         method="GET",

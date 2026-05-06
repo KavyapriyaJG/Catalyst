@@ -4,7 +4,7 @@ import urllib.request
 from typing import Any
 
 from backlog_generation.epic_agent import JiraEpicOutput, JiraStoriesOutput, generate_stories_from_epic
-from backlog_generation.utils.jira_utils import (
+from backlog_generation.jira import (
     build_jira_bulk_epics_payload,
     build_jira_bulk_story_payload,
     jira_auth_header,
