@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     WORKSPACE_DIR: Path = _PROJECT_ROOT / "workspace"
     GENERATED_PRDS_DIR: Path = _PROJECT_ROOT / "generated_prds"
     UPLOADS_DIR: Path = _PROJECT_ROOT / "uploads"
+    BACKLOG_FILES_DIR: Path = _PROJECT_ROOT / "Backlog_Files"
     MODELS_EMBEDDINGS_DIR: Path = _PROJECT_ROOT / "models" / "embeddings"
 
     # ── Derived helpers (computed, not from env) ─────────────────

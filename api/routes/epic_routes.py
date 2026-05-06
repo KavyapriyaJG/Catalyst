@@ -26,11 +26,11 @@ async def run_jira_epic_agent(
     supporting_documents: list[UploadFile] | None = File(default=None),
 ):
     try:
-        validated_epics = await generate_epics(prompt, supporting_documents, epic_count)
+        validated_epics, backlog_id = await generate_epics(prompt, supporting_documents, epic_count)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=500, detail=f"Epic generation failed: {error}") from error
 
-    return JiraEpicsResponse(epics=validated_epics.epics)
+    return JiraEpicsResponse(epics=validated_epics.epics, backlog_id=backlog_id)
 

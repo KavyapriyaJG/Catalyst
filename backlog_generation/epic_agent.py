@@ -56,6 +56,7 @@ class JiraStoryOutput(BaseModel):
     description: str = Field(description="Detailed story description")
     acceptance_criteria: list[str] = Field(default_factory=list)
     priority: str = Field(default="Medium", description="Priority label")
+    status: str = Field(default="draft", description="Initial status")
 
 
 class JiraStoriesOutput(BaseModel):
