@@ -86,7 +86,7 @@ def list_prds() -> list[PrdListItem]:
     return [
         PrdListItem(filename=p.name)
         for p in sorted(
-            get_settings().GENERATED_PRDS_DIR.glob("*.md"),
+            get_settings().GENERATED_PRDS_DIR.glob("*.json"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -97,7 +97,7 @@ def get_prd(filename: str) -> PrdItem:
     """Load a PRD by filename and parse its content and generation timestamp.
 
     Raises:
-        FileNotFoundError: If the file does not exist or is not a .md file.
+        FileNotFoundError: If the file does not exist or is not a .json file.
     """
     filepath = get_settings().GENERATED_PRDS_DIR / filename
     if not filepath.exists() or filepath.suffix != ".json":

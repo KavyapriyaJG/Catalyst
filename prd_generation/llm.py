@@ -31,6 +31,12 @@ def get_llm_claude() -> ChatAnthropic:
     )
 
 
+def clear_llm_cache():
+    """Clear cached LLM instances (useful between pipeline runs)."""
+    get_llm_codex.cache_clear()
+    get_llm_claude.cache_clear()
+
+
 def extract_text(content) -> str:
     """Extract plain text from LLM content (handles both str and list of blocks)."""
     if isinstance(content, str):

@@ -12,6 +12,7 @@ from prd_generation.agents.prd_generator import generate_prd
 from prd_generation.agents.reconciler import reconcile
 from prd_generation.agents.reviewer import review_prd
 from prd_generation.state import AgentState
+from prd_generation.llm import clear_llm_cache
 
 
 # =========================
@@ -184,6 +185,8 @@ async def run_prd_pipeline(
         documents: List of uploaded documents [{id, name, file_content}, ...]
         event_queue: Queue for SSE streaming of progress messages
     """
+    clear_llm_cache()
+    
     original_stdout = sys.stdout
     if event_queue:
         sys.stdout = _OutputCapture(event_queue, original_stdout)

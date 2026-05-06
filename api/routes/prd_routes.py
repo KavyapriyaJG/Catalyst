@@ -109,7 +109,8 @@ async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
             yield f"data: {msg}\n\n"
             await asyncio.sleep(delay)
 
-        filename, prd_json = save_prd(DUMMY_PRD_TEXT)
+        prd_dict = json.loads(DUMMY_PRD_TEXT)
+        filename, prd_json = save_prd(prd_dict)
         formatted_prd = format_prd_keys(prd_json)
         yield (
             f"event: complete\n"
