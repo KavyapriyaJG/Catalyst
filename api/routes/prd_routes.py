@@ -7,10 +7,10 @@ import re
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from api.models import PrdGenerateRequest, PrdItem, PrdListItem
+from api.models import PrdGenerateRequest, PrdItem, PrdListItem, PrdStatusUpdate
 from dummy_prd_content import DUMMY_PRD_STREAM_EVENTS, DUMMY_PRD_TEXT
 from prd_generation.prd_generation_graph import run_prd_pipeline
-from api.services.prd_service import clone_repository, extract_and_validate_documents, get_prd, list_prds, save_prd
+from api.services.prd_service import clone_repository, extract_and_validate_documents, get_prd, list_prds, save_prd, set_prd_status, get_prd_approvals
 
 router = APIRouter(prefix="/prd", tags=["prd"])
 
@@ -124,5 +124,35 @@ def get_prds_list():
 def get_prd_by_id(prd_id: str):
     try:
         return get_prd(prd_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=f"PRD not found: {error}") from error
+
+
+@router.patch(
+    "/{prd_id}/status",
+    response_model=dict,
+    summary="Transition PRD status (draft→pending_review→approved|rejected→published)",
+)
+def update_prd_status_endpoint(prd_id: str, body: PrdStatusUpdate):
+    """Approve, reject, or otherwise transition a PRD's status."""
+    try:
+        updated = set_prd_status(
+            prd_id,
+            body.status,
+            reviewed_by=body.reviewed_by,
+            review_comment=body.review_comment,
+        )
+        return updated
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=f"PRD not found: {error}") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/{prd_id}/approvals", response_model=list[dict])
+def get_prd_approval_history(prd_id: str):
+    """Get the approval event history for a PRD."""
+    try:
+        return get_prd_approvals(prd_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=f"PRD not found: {error}") from error

@@ -44,6 +44,7 @@ class PrdGenerateRequest(BaseModel):
 class PrdListItem(BaseModel):
     id: str
     filename: str
+    status: str | None = "draft"
 
 
 class PrdItem(BaseModel):
@@ -51,6 +52,16 @@ class PrdItem(BaseModel):
     filename: str
     content: dict
     generated_time: float
+    status: str | None = "draft"
+    reviewed_by: str | None = None
+    review_comment: str | None = None
+    reviewed_at: str | None = None
+
+
+class PrdStatusUpdate(BaseModel):
+    status: str
+    reviewed_by: str | None = None
+    review_comment: str | None = None
 
 
 class UploadedFileItem(BaseModel):

@@ -14,6 +14,8 @@ from prd_generation.prd_repository import (
     create_prd,
     get_prd as db_get_prd,
     list_prds as db_list_prds,
+    update_prd_status,
+    get_prd_approval_history,
 )
 
 # Expected section order for PRD content
@@ -151,7 +153,8 @@ def list_prds() -> list[PrdListItem]:
         return [
             PrdListItem(
                 id=str(prd['id']),
-                filename=f"prd_{datetime.fromisoformat(prd['created_at']).strftime('%Y%m%d_%H%M%S')}.json"
+                filename=f"prd_{datetime.fromisoformat(prd['created_at']).strftime('%Y%m%d_%H%M%S')}.json",
+                status=prd['status']
             )
             for prd in prd_records
         ]
@@ -179,4 +182,78 @@ def get_prd(prd_id: str) -> PrdItem:
             filename=filename,
             content=ordered_content,
             generated_time=prd_record.created_at.timestamp() if prd_record.created_at else datetime.now().timestamp(),
+            status=prd_record.status,
+            reviewed_by=prd_record.reviewed_by,
+            review_comment=prd_record.review_comment,
+            reviewed_at=prd_record.reviewed_at.isoformat() if prd_record.reviewed_at else None,
         )
+
+
+def set_prd_status(
+    prd_id: str,
+    new_status: str,
+    reviewed_by: str | None = None,
+    review_comment: str | None = None,
+) -> dict:
+    """Transition a PRD to a new status (approve/reject).
+    
+    Args:
+        prd_id: UUID of the PRD record.
+        new_status: Target status (approved, rejected, etc.).
+        reviewed_by: Name of the reviewer.
+        review_comment: Reviewer's comment.
+        
+    Returns:
+        Dict with updated PRD details including new status and reviewer info.
+        
+    Raises:
+        FileNotFoundError: If PRD not found.
+        ValueError: If transition not allowed.
+    """
+    with get_session() as session:
+        updated_record = update_prd_status(
+            session,
+            prd_id,
+            new_status,
+            reviewed_by=reviewed_by,
+            review_comment=review_comment,
+        )
+        session.commit()
+        
+        filename = f"prd_{updated_record.created_at.strftime('%Y%m%d_%H%M%S')}.json" if updated_record.created_at else f"prd_{prd_id}.json"
+        
+        return {
+            "id": str(updated_record.id),
+            "filename": filename,
+            "status": updated_record.status,
+            "reviewed_by": updated_record.reviewed_by,
+            "review_comment": updated_record.review_comment,
+            "reviewed_at": updated_record.reviewed_at.isoformat() if updated_record.reviewed_at else None,
+            "created_at": updated_record.created_at.isoformat(),
+        }
+
+
+def get_prd_approvals(prd_id: str) -> list[dict]:
+    """Get approval history for a PRD.
+    
+    Args:
+        prd_id: UUID of the PRD record.
+        
+    Returns:
+        List of approval event dicts ordered chronologically.
+    """
+    with get_session() as session:
+        events = get_prd_approval_history(session, prd_id)
+        return [
+            {
+                "id": str(e.id),
+                "prd_id": str(e.prd_id),
+                "from_status": e.from_status,
+                "to_status": e.to_status,
+                "submitted_by": e.submitted_by,
+                "reviewed_by": e.reviewed_by,
+                "comment": e.comment,
+                "created_at": e.created_at.isoformat(),
+            }
+            for e in events
+        ]

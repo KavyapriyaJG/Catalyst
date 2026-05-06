@@ -18,11 +18,10 @@ from prd_generation.prd_models import GeneratedPRDRecord, PRDApprovalEvent
 # Valid status transitions for PRDs
 # ---------------------------------------------------------------------------
 _PRD_TRANSITIONS: dict[str, set[str]] = {
-    "draft": {"pending_review"},
-    "pending_review": {"approved", "rejected"},
-    "approved": {"published"},
-    "rejected": {"draft"},
-    "published": set(),
+    "draft": {"pending_approval"},
+    "pending_approval": {"approved", "rejected"},
+    "approved": {"rejected", "pending_approval"},
+    "rejected": {"approved", "pending_approval", "draft"},
 }
 
 
