@@ -78,7 +78,86 @@ Ingestion and database configuration:
 - `POSTGRES_DSN`: Postgres connection string
 - `ORM_ECHO_SQL`: optional, `false`, `true`, or `debug`
 
-## Running the services
+## Database migrations
+
+Migrations are managed with [Alembic](https://alembic.sqlalchemy.org/).  
+`POSTGRES_DSN` must be set in `.env` (or exported in the shell) before running any migration command.
+
+**Apply all pending migrations (run after first clone or after schema changes):**
+
+```bash
+alembic upgrade head
+```
+
+**Generate a new migration after changing ORM models:**
+
+```bash
+alembic revision --autogenerate -m "describe_your_change"
+alembic upgrade head
+```
+
+**Roll back the last migration:**
+
+```bash
+alembic downgrade -1
+```
+
+**Check current migration state:**
+
+```bash
+alembic current
+alembic history --verbose
+```
+
+---
+
+## Inspecting the database
+
+The project connects to PostgreSQL at the DSN defined in `POSTGRES_DSN`.  
+Default from `env.copy`: `postgresql://user:password@localhost:5432/aiproductcode`
+
+**If Postgres is running inside a Docker container**, find the container name first:
+
+```bash
+docker ps --filter "ancestor=postgres" --format "{{.Names}}"
+```
+
+Then open a `psql` session:
+
+```bash
+# Replace <container> with your container name (e.g. postgres, catalyst-db, etc.)
+docker exec -it <container> psql -U username -d aiproductcode
+```
+
+**Useful psql commands once connected:**
+
+```sql
+-- List all tables
+\dt
+
+-- Inspect a specific table's columns
+\d backlogs
+\d generated_epics
+\d generated_stories
+
+-- View rows
+SELECT id, prompt, status, created_at FROM backlogs ORDER BY created_at DESC LIMIT 10;
+SELECT id, epic_name, status, jira_key FROM generated_epics LIMIT 20;
+SELECT id, title, status, jira_key FROM generated_stories LIMIT 20;
+
+-- Exit psql
+\q
+```
+
+**If Postgres is running locally (not in Docker):**
+
+```bash
+psql -U user -d aiproductcode
+```
+
+---
+
+
 
 Run the FastAPI server:
 

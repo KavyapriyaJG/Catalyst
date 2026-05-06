@@ -16,11 +16,14 @@ class AgentResponse(BaseModel):
 
 class JiraEpicsResponse(BaseModel):
     epics: list[JiraEpicOutput]
+    backlog_id: str | None = None
 
 
 class JiraStoriesRequest(BaseModel):
     epic: JiraEpicOutput
     story_count: int = Field(default=5, ge=1, le=20)
+    backlog_id: str | None = None
+    epic_record_id: str | None = None
 
 
 class JiraStoriesResponse(BaseModel):

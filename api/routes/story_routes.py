@@ -16,7 +16,12 @@ router = APIRouter(tags=["jira-stories"])
 @router.post("/jira/stories", response_model=JiraStoriesResponse)
 def run_jira_story_agent(payload: JiraStoriesRequest):
     try:
-        validated_stories = generate_stories(payload.epic, payload.story_count)
+        validated_stories = generate_stories(
+            payload.epic,
+            payload.story_count,
+            backlog_id=payload.backlog_id,
+            epic_record_id=payload.epic_record_id,
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
@@ -30,6 +35,8 @@ def publish_issues_to_jira(
     payload: JiraEpicsResponse | JiraStoriesResponse,
     issue_type: Literal["epic", "story"] = Query(default="epic", alias="type"),
     parent_key: str | None = Query(default=None, alias="parent-key"),
+    epic_record_id: str | None = Query(default=None),
+    story_record_ids: list[str] | None = Query(default=None),
 ):
     if issue_type == "story":
         if not isinstance(payload, JiraStoriesResponse):
@@ -54,6 +61,8 @@ def publish_issues_to_jira(
             stories_payload=payload if isinstance(payload, JiraStoriesResponse) else None,
             issue_type=issue_type,
             parent_key=parent_key,
+            epic_record_id=epic_record_id,
+            story_record_ids=story_record_ids,
         )
     except JiraPublishError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
