@@ -1,497 +1,50 @@
-import asyncio
-from typing import TypedDict, Dict, Any
-from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, END
-from deepagents import create_deep_agent
-from langchain.tools import tool
-from langchain_anthropic import ChatAnthropic
-from prd_generation.prompts import (
-    ANALYSIS_AGENT_PROMPT,
-    COBOL_PRD_GENERATOR_PROMPT,
-    DOCUMENT_PRD_GENERATOR_PROMPT,
-    COMBINED_PRD_GENERATOR_PROMPT,
-    REVIEWER_PROMPT,
-    RECONCILER_PROMPT
-)
-from prd_generation.output_formatter import (
-    get_json_output_format_instructions,
-    extract_json_from_response
-)
-
-import os
-import re
-import sys
-import json
-import time
-import queue as queue_module
 import logging
-from dotenv import load_dotenv
-from utils.document_utils import build_documents, retrieve_context
+from typing import Dict, Any
+import queue as queue_module
+import sys
+
+from langgraph.graph import END, StateGraph
+
 from config import get_settings
-
-load_dotenv()
-
-# Minimal logging — only show HTTP request URLs (not full payloads)
-logging.basicConfig(
-    level=logging.WARNING,
-    format="%(asctime)s %(message)s",
-    datefmt="%H:%M:%S"
-)
-# Show only HTTP request/response timing
-logging.getLogger("httpx").setLevel(logging.INFO)
-
-def extract_text(content) -> str:
-    """Extract plain text from LLM content (handles both str and list of blocks)."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, dict) and "text" in block:
-                parts.append(block["text"])
-            elif isinstance(block, str):
-                parts.append(block)
-        return "\n".join(parts)
-    return str(content)
-
-# =========================
-# STATE
-# =========================
-
-class AgentState(TypedDict):
-    # Input routing
-    input_path: str | None  # For code analysis
-    github_urls: list[str] | None  # For code from GitHub
-    documents: list[dict] | None  # For document analysis
-    
-    # Analysis results
-    code_analysis: str | None  # Raw code analysis
-    document_analysis: str | None  # Raw document analysis
-    analysis: Dict[str, Any]  # Merged analysis (code + documents)
-    
-    # PRD generation loop
-    prd: Dict[str, Any]
-    review: Dict[str, Any]
-    score: float
-    iteration: int
-    best_prd: Dict[str, Any]
-    best_score: float
-
-# =========================
-# LLM
-# =========================
-
-llm_codex = ChatOpenAI(
-    model=get_settings().AZURE_OPENAI_DEPLOYMENT_NAME,
-    base_url=get_settings().AZURE_OPENAI_ENDPOINT,
-    api_key=get_settings().AZURE_OPENAI_API_KEY,
-    timeout=get_settings().LLM_TIMEOUT,
-    max_retries=get_settings().LLM_MAX_RETRIES,
-    temperature=0
-)
-
-llm_claude = ChatAnthropic(
-    model=get_settings().AZURE_ANTHROPIC_DEPLOYMENT_NAME,
-    anthropic_api_url=get_settings().AZURE_ANTHROPIC_ENDPOINT,
-    anthropic_api_key=get_settings().AZURE_ANTHROPIC_API_KEY,
-    timeout=get_settings().LLM_TIMEOUT,
-    max_retries=get_settings().LLM_MAX_RETRIES
-)
+from prd_generation.agents.code_analysis import analyze
+from prd_generation.agents.document_analysis import analyze_documents
+from prd_generation.agents.prd_generator import generate_prd
+from prd_generation.agents.reconciler import reconcile
+from prd_generation.agents.reviewer import review_prd
+from prd_generation.state import AgentState
 
 
 # =========================
-# PRE-READ SOURCE REGISTRY
-# =========================
-
-# Global registry of pre-read source files grouped by module
-_module_registry: Dict[str, str] = {}
-_module_summary: Dict[str, Dict] = {}
-
-
-def _build_module_registry(input_path: str):
-    """Pre-read all COBOL files and group by top-level module directory."""
-    global _module_registry, _module_summary
-
-    s = get_settings()
-    cobol_extensions = s.COBOL_EXTENSIONS
-    other_names = s.SCAN_OTHER_NAMES
-    excluded_dirs = s.SCAN_EXCLUDED_DIRS
-    module_files: Dict[str, list] = {}
-
-    for root, dirs, files in os.walk(input_path):
-        dirs[:] = [d for d in dirs if d not in excluded_dirs]
-        for f in sorted(files):
-            full = os.path.join(root, f)
-            is_cobol = any(f.endswith(ext) for ext in cobol_extensions)
-            is_other = f in other_names or f.lower().endswith('.md')
-            if not (is_cobol or is_other):
-                continue
-
-            rel = os.path.relpath(full, input_path)
-            parts = rel.split(os.sep)
-            # Group: use 2-level depth (e.g. src/packets) for finer splitting
-            if len(parts) >= 3:
-                module = f"{parts[0]}/{parts[1]}"
-            elif len(parts) == 2:
-                module = parts[0]
-            else:
-                module = "root"
-            module_files.setdefault(module, []).append(full)
-
-    total_files = 0
-    total_chars = 0
-    errors = []
-    for module, fpaths in module_files.items():
-        bundle = []
-        for fpath in fpaths:
-            try:
-                with open(fpath, "r", errors="replace") as fh:
-                    content = fh.read()
-                rel = os.path.relpath(fpath, input_path)
-                bundle.append(f"=== FILE: {rel} ===\n{content}")
-                total_files += 1
-                total_chars += len(content)
-            except Exception as e:
-                errors.append(f"{fpath}: {e}")
-        _module_registry[module] = "\n\n".join(bundle)
-        _module_summary[module] = {"files": len(fpaths), "chars": len(_module_registry[module])}
-
-    print(f"   Found {total_files} files in {len(_module_registry)} modules ({total_chars} chars total)")
-    if errors:
-        print(f"   {len(errors)} files failed to read")
-    for mod, info in sorted(_module_summary.items()):
-        print(f"     {mod}: {info['files']} files, {info['chars']} chars")
-
-
-@tool
-def list_modules() -> dict:
-    """List all available source code modules and their file counts.
-    Returns a dict of module_name -> {files: N, chars: N}.
-    Call this FIRST to see what modules are available for analysis."""
-    print(f"   [TOOL] list_modules() called — {len(_module_summary)} modules available")
-    return _module_summary
-
-
-@tool
-def get_module_source(module_name: str) -> str:
-    """Get the full source code for a specific module.
-    The module_name must match one returned by list_modules().
-    Returns all COBOL/copybook file contents concatenated with file path headers."""
-    if module_name not in _module_registry:
-        print(f"   [TOOL] get_module_source('{module_name}') — NOT FOUND")
-        return f"ERROR: Module '{module_name}' not found. Available: {list(_module_registry.keys())}"
-    chars = len(_module_registry[module_name])
-    print(f"   [TOOL] get_module_source('{module_name}') — returning {chars} chars")
-    return _module_registry[module_name]
-
-
-# =========================
-# ANALYSIS AGENT (Codex for code analysis)
-# =========================
-
-analysis_agent = create_deep_agent(
-    model=llm_codex,
-    tools=[list_modules, get_module_source],
-    system_prompt=ANALYSIS_AGENT_PROMPT
-)
-
-# =========================
-# ANALYZE CODE (COBOL - PRESERVED)
-# =========================
-
-def analyze(s: AgentState):
-    """Analyze COBOL source files with module registry and parallel subagents."""
-    print("\n[Step 1/4] Analyzing COBOL source files...")
-    _build_module_registry(s['input_path'])
-    modules_list = "\n".join(f"  - {m} ({info['files']} files, {info['chars']} chars)" for m, info in sorted(_module_summary.items()))
-    print(f"   Invoking analysis agent (Codex) with {len(_module_summary)} modules...")
-    t0 = time.time()
-    result = analysis_agent.invoke({
-        "messages": [{"role": "user", "content": (
-            f"Analyze the COBOL codebase at {s['input_path']}.\n\n"
-            f"Available modules (pre-loaded):\n{modules_list}\n\n"
-            f"CRITICAL — LAUNCH ALL SUBAGENTS IN PARALLEL:\n"
-            f"1. Call list_modules() to confirm the module list.\n"
-            f"2. Then in ONE SINGLE RESPONSE, emit ALL task tool calls at once — one per module.\n"
-            f"   This makes them run concurrently. Do NOT call them one at a time.\n"
-            f"   Each task instruction: 'Analyze module <name>. Call get_module_source(\"<name>\") to get source. "
-            f"   Extract PROGRAM-IDs, DATA DIVISION, PROCEDURE DIVISION, dependencies, business rules. Return JSON.'\n"
-            f"3. After all tasks complete, merge results into the final JSON output.\n"
-            f"4. Do NOT skip any module."
-        )}]
-    })
-    elapsed = time.time() - t0
-    print(f"   Analysis agent completed in {int(elapsed)}s")
-
-    # Extract subagent task results from message history
-    if isinstance(result, dict):
-        messages = result.get("messages", [])
-        print(f"   Analysis complete. {len(messages)} messages exchanged.")
-
-        # Extract subagent results from ToolMessages
-        subagent_results = []
-        for msg in messages:
-            if getattr(msg, 'type', None) == 'tool' and getattr(msg, 'name', None) == 'task':
-                content = extract_text(getattr(msg, 'content', ''))
-                if content and len(content) > 50:
-                    subagent_results.append(content)
-
-        # Get LLM's final merged summary
-        llm_summary = ""
-        if messages:
-            last_msg = messages[-1]
-            content = getattr(last_msg, 'content', str(last_msg))
-            llm_summary = extract_text(content)
-
-        subagent_total = sum(len(r) for r in subagent_results)
-        print(f"   Subagent results: {len(subagent_results)} modules, {subagent_total} chars total")
-        print(f"   LLM summary: {len(llm_summary)} chars")
-
-        if subagent_results:
-            combined = (
-                "=== ANALYSIS SUMMARY ===\n"
-                f"{llm_summary}\n\n"
-                "=== DETAILED MODULE ANALYSES ===\n\n"
-                + "\n\n---\n\n".join(subagent_results)
-            )
-            print(f"   Combined analysis output: {len(combined)} chars")
-            return {"code_analysis": combined}
-        else:
-            print(f"   WARNING: No subagent results found, using LLM summary only ({len(llm_summary)} chars)")
-            return {"code_analysis": llm_summary}
-
-    return {"code_analysis": str(result)}
-
-# =========================
-# ANALYZE DOCUMENTS (NEW)
-# =========================
-
-def analyze_documents(s: AgentState):
-    """Analyze documents using semantic search and context retrieval."""
-    print("\n[Step 1/4] Analyzing uploaded documents...")
-    documents = s.get('documents', [])
-    
-    if not documents:
-        print("   No documents provided")
-        return {"document_analysis": "No documents uploaded."}
-
-    try:
-        doc_objects = build_documents(documents)
-        print(f"   Built {len(doc_objects)} document objects")
-        queries = [
-            "What are the main requirements and functional specifications?",
-            "What are the key processes and workflows described?",
-            "What data structures and entities are mentioned?",
-            "What are the business rules and constraints?",
-            "What are the technical specifications and dependencies?",
-            "What are the integration points and external systems?"
-        ]
-
-        insights = []
-        for q in queries:
-            try:
-                context = retrieve_context(q, doc_objects, top_k=get_settings().SEMANTIC_TOP_K)
-                if context:
-                    insights.append(f"**{q}**\n{context}")
-            except Exception as e:
-                print(f"   Query '{q}' failed: {e}")
-
-        doc_analysis = "\n\n---\n\n".join(insights) if insights else "Unable to extract meaningful insights from documents."
-        print(f"   Document analysis complete ({len(doc_analysis)} chars)")
-        return {"document_analysis": doc_analysis}
-
-    except Exception as e:
-        print(f"   Error during document analysis: {e}")
-        return {"document_analysis": f"Error analyzing documents: {e}"}
-
-# =========================
-# MERGE ANALYSIS (NEW)
+# MERGE + ROUTING NODES
 # =========================
 
 def merge_analysis(s: AgentState):
-    """Merge code and document analyses for combined flow."""
+    """Merge code and document analyses into a single analysis dict."""
     print("\n[Step 1.5/4] Merging analyses...")
-    code_analysis = s.get('code_analysis')
-    doc_analysis = s.get('document_analysis')
+    code_analysis = s.get("code_analysis")
+    doc_analysis = s.get("document_analysis")
+
     if code_analysis and doc_analysis:
         merged = {
             "source": "code_and_documents",
             "code_insights": code_analysis[:500] + "..." if len(code_analysis) > 500 else code_analysis,
             "document_insights": doc_analysis[:500] + "..." if len(doc_analysis) > 500 else doc_analysis,
             "full_code_analysis": code_analysis,
-            "full_document_analysis": doc_analysis
+            "full_document_analysis": doc_analysis,
         }
-        print(f"   Merged both analyses (source: code_and_documents)")
+        print("   Merged both analyses (source: code_and_documents)")
         return {"analysis": merged}
     elif code_analysis:
-        # Code only
-        merged = {
-            "source": "code_only",
-            "analysis": code_analysis
-        }
-        print(f"   Using code analysis only (source: code_only)")
-        return {"analysis": merged}
+        print("   Using code analysis only (source: code_only)")
+        return {"analysis": {"source": "code_only", "analysis": code_analysis}}
     elif doc_analysis:
-        # Documents only
-        merged = {
-            "source": "documents_only",
-            "analysis": doc_analysis
-        }
-        print(f"   Using document analysis only (source: documents_only)")
-        return {"analysis": merged}
+        print("   Using document analysis only (source: documents_only)")
+        return {"analysis": {"source": "documents_only", "analysis": doc_analysis}}
     else:
-        print(f"   No analysis available")
+        print("   No analysis available")
         return {"analysis": {"source": "none", "message": "No analysis available"}}
 
-# =========================
-# PRD GENERATOR
-# =========================
 
-def generate_prd(state: AgentState):
-    print(f"\n[Step 2/4] Generating PRD from analysis (JSON format)...")
-    print(f"   Invoking Codex {get_settings().AZURE_OPENAI_DEPLOYMENT_NAME} for PRD generation...")
-    analysis_dict = state.get('analysis', {})
-    source = analysis_dict.get('source') if isinstance(analysis_dict, dict) else None
-    
-    if source == 'code_only':
-        prompt_template = COBOL_PRD_GENERATOR_PROMPT
-        print(f"   Using COBOL-specific PRD generator (code-only flow)")
-    elif source == 'documents_only':
-        prompt_template = DOCUMENT_PRD_GENERATOR_PROMPT
-        print(f"   Using document-specific PRD generator (documents-only flow)")
-    elif source == 'code_and_documents':
-        prompt_template = COMBINED_PRD_GENERATOR_PROMPT
-        print(f"   Using combined PRD generator (code + documents flow)")
-    else:
-        raise ValueError(f"Unknown analysis source: {source}. Expected 'code_only', 'documents_only', or 'code_and_documents'")
-    
-    json_instructions = get_json_output_format_instructions()
-    prompt = prompt_template.format(
-        analysis=state['analysis'],
-        json_instructions=json_instructions
-    )
-    
-    t0 = time.time()
-    result = llm_codex.invoke(prompt)
-    elapsed = time.time() - t0
-    response_text = extract_text(result.content)
-    
-    try:
-        prd_json = extract_json_from_response(response_text)
-        print(f"   Codex responded in {int(elapsed)}s — PRD generated (JSON with {len(prd_json)} top-level fields)")
-        return {"prd": prd_json}
-    except ValueError as e:
-        print(f"   Failed to parse PRD JSON: {e}")
-        return {
-            "prd": {
-                "executive_summary": "PRD generation failed",
-                "system_overview": "",
-                "functional_requirements": "",
-                "data_model": "",
-                "process_flows": "",
-                "business_rules": "",
-                "external_interfaces": "",
-                "non_functional_requirements": "",
-                "risks": ""
-            }
-        }
-
-# =========================
-# REVIEWER (JSON PRD INPUT)
-# =========================
-
-def review_prd(state: AgentState):
-    print(f"\n[Step 3/4] Reviewing PRD (iteration {state.get('iteration', 0) + 1})...")
-    print(f"   Invoking Claude {get_settings().AZURE_ANTHROPIC_DEPLOYMENT_NAME} for PRD review...")
-    prd_json_str = json.dumps(state['prd'], indent=2) if isinstance(state['prd'], dict) else str(state['prd'])
-    
-    prompt = REVIEWER_PROMPT.format(
-        analysis=json.dumps(state['analysis'], indent=2) if isinstance(state['analysis'], dict) else str(state['analysis']),
-        prd=prd_json_str
-    )
-    t0 = time.time()
-    result = llm_claude.invoke(prompt)
-    elapsed = time.time() - t0
-    print(f"   Claude responded in {int(elapsed)}s")
-    raw = extract_text(result.content)
-
-    # Strip markdown code fences if present (```json ... ``` or ``` ... ```)
-    stripped = raw.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        # Remove opening fence (```json or ```)
-        lines = lines[1:]
-        # Remove closing fence
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        stripped = "\n".join(lines).strip()
-
-    # Extract first {...} JSON object if there's leading/trailing text
-    json_match = re.search(r'\{.*\}', stripped, re.DOTALL)
-    if json_match:
-        stripped = json_match.group(0)
-
-    try:
-        parsed = json.loads(stripped)
-    except Exception as parse_err:
-        print(f"   WARNING: Failed to parse review JSON: {parse_err}")
-        print(f"   Raw response (first 500 chars): {raw[:500]}")
-        parsed = {
-            "score": 0,
-            "issues": {"critical": ["Invalid JSON"], "moderate": [], "minor": []}
-        }
-
-    score = parsed.get("score", 0)
-    grade = parsed.get("grade", "N/A")
-    print(f"   Review score: {score}/100 (Grade: {grade})")
-
-    # Track best-scoring PRD across iterations
-    update = {
-        "review": parsed,
-        "score": score
-    }
-    prev_best = state.get("best_score", 0)
-    if score > prev_best:
-        print(f"   New best score: {score} (previous best: {prev_best})")
-        update["best_prd"] = state["prd"]
-        update["best_score"] = score
-    return update
-
-# =========================
-# RECONCILER (JSON PRD PROCESSING)
-# =========================
-
-def reconcile(state: AgentState):
-    print(f"\n[Step 4/4] Reconciling PRD (iteration {state['iteration'] + 1})...")
-    print(f"   Invoking Codex {get_settings().AZURE_OPENAI_DEPLOYMENT_NAME} for PRD reconciliation...")
-    prd_json_str = json.dumps(state['prd'], indent=2) if isinstance(state['prd'], dict) else str(state['prd'])
-    analysis_str = json.dumps(state['analysis'], indent=2) if isinstance(state['analysis'], dict) else str(state['analysis'])
-    
-    json_instructions = get_json_output_format_instructions()
-    prompt = RECONCILER_PROMPT.format(
-        prd=prd_json_str,
-        review=json.dumps(state['review'], indent=2),
-        analysis=analysis_str,
-        json_instructions=json_instructions
-    )
-    t0 = time.time()
-    result = llm_codex.invoke(prompt)
-    elapsed = time.time() - t0
-    
-    # Extract and parse JSON response
-    response_text = extract_text(result.content)
-    
-    try:
-        prd_json = extract_json_from_response(response_text)
-        print(f"   Codex responded in {int(elapsed)}s — Reconciled PRD (JSON with {len(prd_json)} top-level fields)")
-    except ValueError as e:
-        print(f"   Failed to parse reconciled PRD JSON: {e}")
-        prd_json = state['prd']
-    
-    return {
-        "prd": prd_json,
-        "iteration": state["iteration"] + 1
-    }
 
 # =========================
 # GRAPH
@@ -511,23 +64,35 @@ def route_entry(s):
         return "code"
     elif has_docs:
         return "docs"
-    else:
-        return "error"
+    return "error"
 
 
-def route_after_code(s):
-    """After code analysis, check if documents also need analysis."""
-    if s.get('documents'):
-        return "docs"
-    else:
-        return "merge"
+def route_after_code(s: AgentState):
+    return "docs" if s.get("documents") else "merge"
 
 
-def route_start_node(s):
-    """Entry point that just passes through - routing happens via conditional edges."""
+def route_start_node(s: AgentState):
     return {}
 
 
+def should_continue(state: AgentState):
+    s = get_settings()
+    if state["score"] >= s.PRD_SCORE_THRESHOLD:
+        print(f"\nDone (score >= {s.PRD_SCORE_THRESHOLD}). Final score: {state['score']}/100")
+        return END
+    if state["iteration"] >= s.PRD_MAX_ITERATIONS:
+        best = state.get("best_score", state["score"])
+        print(f"\nDone (max iterations reached). Using best PRD with score: {best}/100")
+        return END
+    print(f"   Score {state['score']}/100 < {s.PRD_SCORE_THRESHOLD}, refining...")
+    return "reconcile"
+
+
+# =========================
+# GRAPH
+# =========================
+
+graph = StateGraph(AgentState)
 graph.add_node("_route_start", route_start_node)
 graph.add_node("analyze_code", analyze)
 graph.add_node("analyze_documents", analyze_documents)
@@ -536,50 +101,20 @@ graph.add_node("prd", generate_prd)
 graph.add_node("review", review_prd)
 graph.add_node("reconcile", reconcile)
 
-# Entry: route to code, docs, or both
 graph.set_entry_point("_route_start")
 graph.add_conditional_edges(
     "_route_start",
     route_entry,
-    {
-        "code": "analyze_code",
-        "docs": "analyze_documents",
-        "both": "analyze_code",
-    }
+    {"code": "analyze_code", "docs": "analyze_documents", "both": "analyze_code"},
 )
-
-# After code analysis: route to docs (if present) or merge
 graph.add_conditional_edges(
     "analyze_code",
     route_after_code,
-    {
-        "docs": "analyze_documents",
-        "merge": "merge"
-    }
+    {"docs": "analyze_documents", "merge": "merge"},
 )
-
-# After docs analysis: always merge
 graph.add_edge("analyze_documents", "merge")
-
-# After merge: generate PRD
 graph.add_edge("merge", "prd")
 graph.add_edge("prd", "review")
-
-# =========================
-# LOOP CONTROL
-# =========================
-
-def should_continue(state: AgentState):
-    if state["score"] >= get_settings().PRD_SCORE_THRESHOLD:
-        print(f"\nDone (score >= {get_settings().PRD_SCORE_THRESHOLD}). Final score: {state['score']}/100")
-        return END
-    if state["iteration"] >= get_settings().PRD_MAX_ITERATIONS:
-        best = state.get('best_score', state['score'])
-        print(f"\nDone (max iterations reached). Using best PRD with score: {best}/100")
-        return END
-    print(f"   Score {state['score']}/100 < 80, refining...")
-    return "reconcile"
-
 graph.add_conditional_edges("review", should_continue)
 graph.add_edge("reconcile", "review")
 
@@ -590,8 +125,15 @@ prd_pipeline = graph.compile()
 # SSE OUTPUT CAPTURE
 # =========================
 
+_MODEL_URL_MAP = {
+    "gitnexus-test.openai.azure.com": "Codex (gpt-5.3-codex)",
+    "kavin-mnh5g313-eastus2.services.ai.azure.com": "Claude (claude-opus-4-7)",
+}
+
+
 class _OutputCapture:
     """Tee stdout writes to a thread-safe queue for SSE streaming."""
+
     def __init__(self, event_queue: queue_module.Queue, original):
         self._queue = event_queue
         self._original = original
@@ -607,14 +149,9 @@ class _OutputCapture:
         self._original.flush()
 
 
-_MODEL_URL_MAP = {
-    "gitnexus-test.openai.azure.com": "Codex (gpt-5.3-codex)",
-    "kavin-mnh5g313-eastus2.services.ai.azure.com": "Claude (claude-opus-4-7)",
-}
-
-
 class _QueueLogHandler(logging.Handler):
-    """Push httpx log records to a queue, replacing raw URLs with model names."""
+    """Push httpx log records to the SSE queue, replacing raw URLs with model names."""
+
     def __init__(self, event_queue: queue_module.Queue):
         super().__init__()
         self._queue = event_queue
@@ -623,14 +160,15 @@ class _QueueLogHandler(logging.Handler):
         msg = self.format(record)
         if not msg.strip():
             return
-        # Transform raw HTTP log into a meaningful model message
         for url_fragment, model_label in _MODEL_URL_MAP.items():
             if url_fragment in msg:
                 self._queue.put(f"   {model_label} API call completed")
                 return
-        # Skip unrecognised httpx lines
-        return
 
+
+# =========================
+# PIPELINE ENTRY POINT
+# =========================
 
 async def run_prd_pipeline(
     input_path: str = None,
@@ -668,9 +206,9 @@ async def run_prd_pipeline(
             "score": 0,
             "iteration": 0,
             "best_prd": {},
-            "best_score": 0
+            "best_score": 0,
         }
-        
+
         result = await prd_pipeline.ainvoke(initial_state)
 
         if result["score"] >= 80:
@@ -680,65 +218,17 @@ async def run_prd_pipeline(
             best_prd = result.get("best_prd", {})
             if best_prd and result.get("best_score", 0) > result["score"]:
                 prd_json = best_prd
-                print(f"\n   Using best PRD from earlier iteration (score: {result['best_score']}/100 vs final: {result['score']}/100)")
+                print(
+                    f"\n   Using best PRD from earlier iteration "
+                    f"(score: {result['best_score']}/100 vs final: {result['score']}/100)"
+                )
             else:
                 prd_json = result["prd"]
                 print(f"\n   Using final PRD (score: {result['score']}/100)")
-        
+
         return prd_json
     finally:
         if event_queue:
             sys.stdout = original_stdout
         if log_handler:
             logging.getLogger("httpx").removeHandler(log_handler)
-
-# =========================
-# RUN
-# =========================
-
-async def main():
-    start_time = time.time()
-    print("🚀 Starting PRD Generation Pipeline\n")
-    
-    # Example with code input
-    result = await prd_pipeline.ainvoke({
-        "input_path": "/Users/kavinkumarbaskar/Downloads/testing-cobol/zosconnect-sample-cobol-apirequester",
-        "github_urls": None,
-        "documents": None,
-        "code_analysis": None,
-        "document_analysis": None,
-        "analysis": {},
-        "prd": {},
-        "review": {},
-        "score": 0,
-        "iteration": 0,
-        "best_prd": {},
-        "best_score": 0
-    })
-
-    # Use best PRD if max iterations reached without hitting 80%
-    if result["score"] >= 80:
-        prd_json = result["prd"]
-        print(f"\n   Using current PRD (score: {result['score']}/100)")
-    else:
-        best_prd = result.get("best_prd", {})
-        if best_prd and result.get("best_score", 0) > result["score"]:
-            prd_json = best_prd
-            print(f"\n   Using best PRD from earlier iteration (score: {result['best_score']}/100 vs final: {result['score']}/100)")
-        else:
-            prd_json = result["prd"]
-            print(f"\n   Using final PRD (score: {result['score']}/100)")
-    
-    print("\n" + "=" * 60)
-    
-    # Save as JSON
-    with open("final_prd.json", "w") as f:
-        json.dump(prd_json, f, indent=2)
-    
-    elapsed = time.time() - start_time
-    mins, secs = divmod(int(elapsed), 60)
-    print(f"\n📄 PRD saved to final_prd.md")
-    print(f"⏱️  Pipeline completed in {mins}m {secs}s")
-
-if __name__ == "__main__":
-    asyncio.run(main())
