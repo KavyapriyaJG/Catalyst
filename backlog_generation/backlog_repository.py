@@ -138,6 +138,11 @@ def get_epic_with_stories(session: Session, epic_record_id: str) -> GeneratedEpi
     )
 
 
+def get_story(session: Session, story_record_id: str) -> GeneratedStoryRecord | None:
+    """Load a single story by its record UUID."""
+    return session.get(GeneratedStoryRecord, story_record_id)
+
+
 def delete_backlog(session: Session, backlog_id: str) -> bool:
     """Delete a backlog and all related records (cascade). Returns True if found."""
     record = session.get(BacklogRecord, backlog_id)

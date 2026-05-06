@@ -15,6 +15,7 @@ from backlog_generation.backlog_repository import (
     delete_backlog,
     get_backlog_with_epics,
     get_epic_with_stories,
+    get_story,
     list_backlogs,
     mark_epic_published,
     mark_story_published,
@@ -147,6 +148,14 @@ def get_epic(epic_record_id: str) -> dict | None:
         if epic is None:
             return None
         return _epic_to_dict(epic, include_stories=True)
+
+
+def get_story_by_id(story_record_id: str) -> dict | None:
+    with get_session() as session:
+        story = get_story(session, story_record_id)
+        if story is None:
+            return None
+        return _story_to_dict(story)
 
 
 def remove_backlog(backlog_id: str) -> bool:
