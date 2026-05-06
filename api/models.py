@@ -42,10 +42,12 @@ class PrdGenerateRequest(BaseModel):
 
 
 class PrdListItem(BaseModel):
+    id: str
     filename: str
 
 
 class PrdItem(BaseModel):
+    id: str
     filename: str
     content: dict
     generated_time: float

@@ -14,10 +14,6 @@ from api.services.prd_service import clone_repository, extract_and_validate_docu
 
 router = APIRouter(prefix="/prd", tags=["prd"])
 
-def format_prd_keys(prd_dict: dict) -> dict:
-    """Convert snake_case keys to Title Case with spaces."""
-    return {key.replace('_', ' ').title(): value for key, value in prd_dict.items()}
-
 def _resolve_prd_inputs(payload: PrdGenerateRequest) -> tuple[str | None, list[dict]]:
     """Validate and resolve the PRD request into an input_path and parsed documents.
 
@@ -83,10 +79,9 @@ async def _stream_prd_pipeline(
             break
 
     try:
-        prd_text = pipeline_task.result()
-        filename, prd_json = save_prd(prd_text)
-        formatted_prd = format_prd_keys(prd_json)
-        yield f"event: complete\ndata: {json.dumps({'prd': formatted_prd, 'file': filename})}\n\n"
+        prd_json = pipeline_task.result()
+        prd_id, prd_json, filename = save_prd(prd_json)
+        yield f"event: complete\ndata: {json.dumps({'prd': prd_json, 'id': prd_id, 'filename': filename})}\n\n"
     except Exception as error:
         yield f"event: error\ndata: {json.dumps({'error': str(error)})}\n\n"
 
@@ -110,11 +105,11 @@ async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
             await asyncio.sleep(delay)
 
         prd_dict = json.loads(DUMMY_PRD_TEXT)
-        filename, prd_json = save_prd(prd_dict)
-        formatted_prd = format_prd_keys(prd_json)
+        prd_id, prd_json, filename = save_prd(prd_dict)
+        
         yield (
             f"event: complete\n"
-            f"data: {json.dumps({'prd': formatted_prd, 'file': filename})}\n\n"
+            f"data: {json.dumps({'prd': prd_json, 'id': prd_id, 'filename': filename})}\n\n"
         )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -125,9 +120,9 @@ def get_prds_list():
     return list_prds()
 
 
-@router.get("/{filename}", response_model=PrdItem)
-def get_prd_by_filename(filename: str):
+@router.get("/{prd_id}", response_model=PrdItem)
+def get_prd_by_id(prd_id: str):
     try:
-        return get_prd(filename)
+        return get_prd(prd_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=f"PRD not found: {error}") from error

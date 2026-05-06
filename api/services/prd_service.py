@@ -1,11 +1,62 @@
+import git
 import shutil
 import uuid
 from datetime import datetime
 import json
+from pathlib import Path
+from uuid import UUID
 
 from api.models import PrdItem, PrdListItem
 from config import get_settings
 from utils.document_utils import extract_documents_from_uploads
+from backlog_generation.db import get_session
+from prd_generation.prd_repository import (
+    create_prd,
+    get_prd as db_get_prd,
+    list_prds as db_list_prds,
+)
+
+# Expected section order for PRD content
+EXPECTED_SECTION_ORDER = [
+    "Executive Summary",
+    "System Overview",
+    "Functional Requirements",
+    "Data Model",
+    "Process Flows",
+    "Business Rules",
+    "External Interfaces",
+    "Non Functional Requirements",
+    "Risks",
+]
+
+
+def order_prd_sections(prd_dict: dict) -> dict:
+    """Reorder and format PRD dict keys to match expected section order.
+    
+    Args:
+        prd_dict: PRD content dict with potentially unordered keys (snake_case or Title Case)
+        
+    Returns:
+        Dict with keys in expected section order and formatted as Title Case
+    """
+    # Normalize all keys: convert snake_case to Title Case for comparison
+    normalized = {}
+    for key, value in prd_dict.items():
+        normalized_key = key.replace('_', ' ').title()
+        normalized[normalized_key] = value
+    
+    ordered = {}
+    
+    # Add sections in expected order
+    for section in EXPECTED_SECTION_ORDER:
+        if section in normalized:
+            ordered[section] = normalized[section]
+    
+    for key, value in normalized.items():
+        if key not in ordered:
+            ordered[key] = value
+    
+    return ordered
 
 
 def clone_repository(url: str) -> str:
@@ -20,8 +71,6 @@ def clone_repository(url: str) -> str:
     Raises:
         ValueError: If the git clone fails.
     """
-    import git
-
     s = get_settings()
     workspace_dir = s.WORKSPACE_DIR
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -63,59 +112,71 @@ def extract_and_validate_documents(doc_refs: list[dict]) -> list[dict[str, str]]
     return documents
 
 
-def save_prd(prd_json: dict) -> tuple[str, dict]:
-    """Persist a PRD to disk and parse its structure.
+def save_prd(prd_data: dict, source_files: list[str] | None = None) -> tuple[str, dict, str]:
+    """Persist a PRD to database and disk as JSON, returning parsed structure.
 
     Args:
-        prd_json: Parsed JSON of the generated PRD.
+        prd_data: A dict of the PRD content (JSON object).
+        source_files: Optional list of source file names.
 
     Returns:
-        Tuple of (filename, prd_json) where filename is the saved file's name
-        and prd_json is the parsed heading-structured dict.
+        Tuple of (prd_id, prd_json, filename) where prd_id is the database record ID,
+        prd_json is the parsed content, and filename is the disk filename.
     """
+    # Use dict directly as JSON
+    prd_json = prd_data if isinstance(prd_data, dict) else {"content": str(prd_data)}
+    
+    # Store in database
+    with get_session() as session:
+        prd_record = create_prd(
+            session,
+            source_files=source_files or [],
+            prd_content=prd_json
+        )
+        prd_id = str(prd_record.id)
+    
+    # Also save to disk for backward compatibility
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     unique_id = uuid.uuid4().hex[:8]
     filename = f"prd_{timestamp}_{unique_id}.json"
     filepath = get_settings().GENERATED_PRDS_DIR / filename
-    filepath.write_text(json.dumps(prd_json, indent=2))
-    return filename, prd_json
+    filepath.write_text(json.dumps(prd_json, indent=2))    
+    return prd_id, prd_json, filename
 
 
 def list_prds() -> list[PrdListItem]:
-    """Return all saved PRDs sorted by modification time descending."""
-    return [
-        PrdListItem(filename=p.name)
-        for p in sorted(
-            get_settings().GENERATED_PRDS_DIR.glob("*.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-    ]
+    """Return all saved PRDs from database sorted by creation time descending."""
+    with get_session() as session:
+        prd_records = db_list_prds(session)
+        return [
+            PrdListItem(
+                id=str(prd['id']),
+                filename=f"prd_{datetime.fromisoformat(prd['created_at']).strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            for prd in prd_records
+        ]
 
 
-def get_prd(filename: str) -> PrdItem:
-    """Load a PRD by filename and parse its content and generation timestamp.
+def get_prd(prd_id: str) -> PrdItem:
+    """Load a PRD by ID from database.
+
+    Args:
+        prd_id: UUID of the PRD record.
 
     Raises:
-        FileNotFoundError: If the file does not exist or is not a .json file.
+        FileNotFoundError: If the PRD does not exist.
     """
-    filepath = get_settings().GENERATED_PRDS_DIR / filename
-    if not filepath.exists() or filepath.suffix != ".json":
-        raise FileNotFoundError(f"PRD not found: {filename}")
-    prd_json = json.loads(filepath.read_text())
-    try:
-        parts = filename.replace(".json", "").split("_")
-        if len(parts) >= 3 and parts[0] == "prd":
-            date_str = parts[1]
-            time_str = parts[2]
-            dt_str = f"{date_str} {time_str}"
-            dt = datetime.strptime(dt_str, "%Y%m%d %H%M%S")
-            generated_time = dt.timestamp()
-        else:
-            generated_time = datetime.now().timestamp()
-    except Exception:
-        generated_time = datetime.now().timestamp()
-    formatted_prd = {key.replace('_', ' ').title(): value for key, value in prd_json.items()}
-    
-    return PrdItem(filename=filepath.name, content=formatted_prd, generated_time=generated_time)
-
+    with get_session() as session:
+        prd_record = db_get_prd(session, UUID(prd_id))
+        if not prd_record:
+            raise FileNotFoundError(prd_id)
+        
+        filename = f"prd_{prd_record.created_at.strftime('%Y%m%d_%H%M%S')}.json" if prd_record.created_at else f"prd_{prd_id}.json"
+        ordered_content = order_prd_sections(prd_record.prd_content or {})
+        
+        return PrdItem(
+            id=str(prd_record.id),
+            filename=filename,
+            content=ordered_content,
+            generated_time=prd_record.created_at.timestamp() if prd_record.created_at else datetime.now().timestamp(),
+        )
