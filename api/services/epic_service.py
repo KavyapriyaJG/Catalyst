@@ -6,6 +6,7 @@ from fastapi import UploadFile
 
 from backlog_generation.epic_agent import JiraEpicsOutput, generate_jira_epics
 from config import get_settings
+from api.services import backlog_service
 
 
 async def parse_uploaded_files(
@@ -37,8 +38,15 @@ async def generate_epics(
     prompt: str,
     uploaded_files: list[UploadFile] | None,
     epic_count: int,
+    prd_documents: list[dict[str, str]] | None = None,
 ) -> tuple[JiraEpicsOutput, str]:
     """Parse uploaded files, generate Jira epics, persist files + DB records.
+
+    Args:
+        prompt: The epic generation prompt.
+        uploaded_files: Optional uploaded files to parse.
+        epic_count: Number of epics to generate.
+        prd_documents: Optional PRD documents fetched from database.
 
     Returns:
         A 2-tuple of (validated_epics, backlog_id).
@@ -47,35 +55,30 @@ async def generate_epics(
     if not cleaned_prompt:
         raise ValueError("Prompt cannot be empty.")
 
-    parsed_documents, raw_pairs = await parse_uploaded_files(uploaded_files or [])
+    all_documents, raw_pairs = await parse_uploaded_files(uploaded_files or [])
+    if prd_documents:
+        all_documents.extend(prd_documents)
 
-    # Pre-allocate backlog_id for the filesystem directory.
     backlog_id = uuid4().hex
     settings = get_settings()
     backlog_dir: Path = settings.BACKLOG_FILES_DIR / backlog_id
 
-    # Copy uploaded files to Backlog_Files/{backlog_id}/ before LLM call so
-    # the directory exists even if generation fails.
     if raw_pairs:
         backlog_dir.mkdir(parents=True, exist_ok=True)
         for filename, raw_bytes in raw_pairs:
-            safe_name = Path(filename).name  # strip any directory component
+            safe_name = Path(filename).name
             dest = backlog_dir / safe_name
             dest.write_bytes(raw_bytes)
 
     try:
-        epics_data = generate_jira_epics(cleaned_prompt, parsed_documents, epic_count=epic_count)
+        epics_data = generate_jira_epics(cleaned_prompt, all_documents, epic_count=epic_count)
         validated = JiraEpicsOutput(**epics_data)
         if not validated.epics:
             raise ValueError("Epic generation returned an empty epics list.")
     except Exception:
-        # Clean up files if LLM fails
         if backlog_dir.exists():
             shutil.rmtree(backlog_dir, ignore_errors=True)
         raise
-
-    # Persist backlog + epics to the database.
-    from api.services import backlog_service  # late import to avoid circular dependency
 
     source_filenames = [name for name, _ in raw_pairs]
     db_result = backlog_service.create_and_save_epics(
@@ -86,7 +89,6 @@ async def generate_epics(
     )
     real_backlog_id: str = db_result["id"]
 
-    # If the real DB-assigned UUID differs from our pre-allocated one, rename dir.
     if raw_pairs and real_backlog_id != backlog_id:
         real_dir = settings.BACKLOG_FILES_DIR / real_backlog_id
         backlog_dir.rename(real_dir)

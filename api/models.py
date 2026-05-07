@@ -47,6 +47,7 @@ class PrdListItem(BaseModel):
     prd_name: str
     filename: str
     status: str | None = "draft"
+    created_at: str | None = None
 
 
 class PrdItem(BaseModel):

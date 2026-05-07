@@ -162,7 +162,8 @@ def list_prds() -> list[PrdListItem]:
                 id=str(prd['id']),
                 prd_name=prd.get('prd_name') or "Untitled PRD",
                 filename=f"prd_{datetime.fromisoformat(prd['created_at']).strftime('%Y%m%d_%H%M%S')}.json",
-                status=prd['status']
+                status=prd['status'],
+                created_at=prd['created_at']
             )
             for prd in prd_records
         ]
@@ -266,3 +267,25 @@ def get_prd_approvals(prd_id: str) -> list[dict]:
             }
             for e in events
         ]
+
+
+def extract_prds_as_documents(prd_ids: list[str]) -> list[dict[str, str]]:
+    """Fetch PRDs by ID and convert to document format for epic generation.
+
+    Args:
+        prd_ids: List of PRD IDs (UUIDs) to fetch.
+
+    Returns:
+        List of {filename, content} dicts suitable for epic generation.
+    """
+    documents = []
+    for prd_id in prd_ids:
+        try:
+            prd_item = get_prd(prd_id)
+            documents.append({
+                "filename": prd_item.filename,
+                "content": json.dumps(prd_item.content, indent=2)
+            })
+        except FileNotFoundError:
+            continue
+    return documents
