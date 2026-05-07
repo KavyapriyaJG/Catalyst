@@ -1,6 +1,6 @@
 """PRD generation module."""
 
-from prd_generation.prd_models import GeneratedPRDRecord, PRDApprovalEvent
+from prd_generation.prd_models import GeneratedPRDRecord
 from prd_generation.prd_repository import (
     create_prd,
     list_prds,
@@ -13,7 +13,6 @@ from prd_generation.prd_repository import (
 
 __all__ = [
     "GeneratedPRDRecord",
-    "PRDApprovalEvent",
     "create_prd",
     "list_prds",
     "get_prd",

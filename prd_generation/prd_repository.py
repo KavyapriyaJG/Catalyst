@@ -12,7 +12,8 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from prd_generation.prd_models import GeneratedPRDRecord, PRDApprovalEvent
+from prd_generation.prd_models import GeneratedPRDRecord
+from approval.models import ApprovalEvent
 
 # ---------------------------------------------------------------------------
 # Valid status transitions for PRDs
@@ -33,16 +34,19 @@ def _write_prd_approval_event(
     session: Session,
     *,
     prd_id: str,
+    prd_name: str,
     from_status: str,
     to_status: str,
     reviewed_by: str | None,
     comment: str | None,
     submitted_by: str | None = None,
 ) -> None:
-    """Append one row to prd_approval_events (best-effort — never raises)."""
+    """Append one row to shared approval_events table (best-effort — never raises)."""
     try:
-        event = PRDApprovalEvent(
-            prd_id=prd_id,
+        event = ApprovalEvent(
+            artifact_type="prd",
+            artifact_id=prd_id,
+            artifact_name=prd_name,
             from_status=from_status,
             to_status=to_status,
             submitted_by=submitted_by,
@@ -150,6 +154,7 @@ def update_prd_status(
     _write_prd_approval_event(
         session,
         prd_id=prd_id,
+        prd_name="prd",
         from_status=from_status,
         to_status=new_status,
         reviewed_by=reviewed_by,
@@ -172,16 +177,19 @@ def delete_prd(session: Session, prd_id: str) -> bool:
 def get_prd_approval_history(
     session: Session, prd_id: str
 ) -> list[dict]:
-    """Get approval event history for a PRD."""
+    """Get approval event history for a PRD from shared approval_events table."""
     events = session.execute(
-        select(PRDApprovalEvent)
-        .where(PRDApprovalEvent.prd_id == prd_id)
-        .order_by(PRDApprovalEvent.created_at.asc())
+        select(ApprovalEvent)
+        .where(ApprovalEvent.artifact_id == prd_id)
+        .where(ApprovalEvent.artifact_type == "prd")
+        .order_by(ApprovalEvent.created_at.asc())
     ).scalars().all()
 
     return [
         {
             "id": str(e.id),
+            "artifact_type": e.artifact_type,
+            "artifact_name": e.artifact_name,
             "from_status": e.from_status,
             "to_status": e.to_status,
             "submitted_by": e.submitted_by,

@@ -23,7 +23,7 @@ from backlog_generation.backlog_repository import (
     update_epic_status,
     update_story_status,
 )
-from backlog_generation.approval_models import ApprovalEvent
+from approval.models import ApprovalEvent
 from backlog_generation.db import get_session
 from backlog_generation.epic_agent import JiraEpicOutput, JiraStoryOutput
 from config import get_settings

@@ -45,29 +45,3 @@ class GeneratedPRDRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
-
-
-class PRDApprovalEvent(Base):
-    """Audit trail for PRD status transitions and reviews."""
-
-    __tablename__ = "prd_approval_events"
-
-    id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
-        primary_key=True,
-        server_default=text("gen_random_uuid()"),
-    )
-    prd_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
-        ForeignKey("generated_prds.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    from_status: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
-    to_status: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
-    submitted_by: Mapped[str | None] = mapped_column(VARCHAR(255), nullable=True)
-    reviewed_by: Mapped[str | None] = mapped_column(VARCHAR(255), nullable=True)
-    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
-    )

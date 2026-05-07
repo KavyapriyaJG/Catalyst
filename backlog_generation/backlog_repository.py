@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from backlog_generation.approval_models import ApprovalEvent
+from approval.models import ApprovalEvent
 from backlog_generation.backlog_models import (
     BacklogRecord,
     GeneratedEpicRecord,
