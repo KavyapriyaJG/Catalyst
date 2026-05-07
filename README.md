@@ -126,7 +126,7 @@ Then open a `psql` session:
 
 ```bash
 # Replace <container> with your container name (e.g. postgres, catalyst-db, etc.)
-docker exec -it <container> psql -U username -d aiproductcode
+docker exec -it <container> psql -U username -d catalyst
 ```
 
 **Useful psql commands once connected:**

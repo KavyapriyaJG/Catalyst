@@ -14,6 +14,7 @@ class StatusUpdate(BaseModel):
     status: str
     reviewed_by: str | None = None
     review_comment: str | None = None
+    submitted_by: str | None = None
 
 
 class PublishRequest(BaseModel):
@@ -160,6 +161,7 @@ def update_epic_status(backlog_id: str, epic_record_id: str, body: StatusUpdate)
             body.status,
             reviewed_by=body.reviewed_by,
             review_comment=body.review_comment,
+            submitted_by=body.submitted_by,
         )
     except FileNotFoundError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
@@ -181,6 +183,7 @@ def update_story_status(
             body.status,
             reviewed_by=body.reviewed_by,
             review_comment=body.review_comment,
+            submitted_by=body.submitted_by,
         )
     except FileNotFoundError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err

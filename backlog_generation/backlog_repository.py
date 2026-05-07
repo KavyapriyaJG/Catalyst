@@ -189,6 +189,7 @@ def update_epic_status(
     new_status: str,
     reviewed_by: str | None = None,
     review_comment: str | None = None,
+    submitted_by: str | None = None,
 ) -> GeneratedEpicRecord:
     """Transition an epic to a new status, raising ValueError for invalid moves."""
     record = session.get(GeneratedEpicRecord, epic_record_id)
@@ -217,6 +218,7 @@ def update_epic_status(
         to_status=new_status,
         reviewed_by=reviewed_by,
         comment=review_comment,
+        submitted_by=submitted_by,
     )
     session.flush()
     return record
@@ -271,6 +273,7 @@ def update_story_status(
     new_status: str,
     reviewed_by: str | None = None,
     review_comment: str | None = None,
+    submitted_by: str | None = None,
 ) -> GeneratedStoryRecord:
     """Transition a story to a new status, raising ValueError for invalid moves."""
     record = session.get(GeneratedStoryRecord, story_record_id)
@@ -299,6 +302,7 @@ def update_story_status(
         to_status=new_status,
         reviewed_by=reviewed_by,
         comment=review_comment,
+        submitted_by=submitted_by,
     )
     session.flush()
     return record
