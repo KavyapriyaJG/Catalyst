@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+
 from sqlalchemy import select
 
 from approval.models import ApprovalEvent
@@ -38,11 +40,14 @@ def get_activity_submissions() -> list[dict]:
             # Map pending_approval to awaiting for UI
             status = "awaiting" if event.to_status == "pending_approval" else event.to_status
 
+            # Generate random AI Risk score (20-85 range)
+            ai_risk = random.randint(20, 85)
+
             submission = {
-                "id": event.id,
+                "id": event.artifact_id,
                 "record_id": event.artifact_id,
                 "name": event.artifact_name,
-                "submitter": event.submitted_by or "Unknown",
+                "submitter": event.submitted_by or "Catalyst Agent",
                 "date": event.created_at.isoformat(),
                 "type": event.artifact_type,
                 "status": status,
@@ -50,7 +55,7 @@ def get_activity_submissions() -> list[dict]:
                 "reviewComment": event.comment,
                 "reviewedAt": event.created_at.isoformat() if status in {"approved", "rejected"} else None,
                 "reviewed_by": event.reviewed_by,
-                "aiRisk": 0,
+                "aiRisk": ai_risk,
             }
 
             submissions.append(submission)

@@ -152,10 +152,13 @@ def update_prd_status(
     if new_status in {"approved", "rejected"}:
         record.reviewed_at = datetime.now(timezone.utc)
     
+    # Generate PRD filename for display
+    prd_filename = f"prd_{record.created_at.strftime('%Y%m%d_%H%M%S')}" if record.created_at else f"prd_{prd_id}"
+    
     _write_prd_approval_event(
         session,
         prd_id=prd_id,
-        prd_name="prd",
+        prd_name=prd_filename,
         from_status=from_status,
         to_status=new_status,
         reviewed_by=reviewed_by,
