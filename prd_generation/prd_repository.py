@@ -52,6 +52,7 @@ def _write_prd_approval_event(
             submitted_by=submitted_by,
             reviewed_by=reviewed_by,
             comment=comment,
+            backlog_id=None,  # PRDs do not belong to backlogs
         )
         session.add(event)
     except Exception:

@@ -14,7 +14,7 @@ from backlog_generation.models import Base
 class ApprovalEvent(Base):
     """Immutable audit record written on every approve/reject action.
 
-    Module-agnostic: every artifact type (epic, story, requirement, srs,
+    Module-agnostic: every artifact type (epic, story, prd, srs,
     test_case, deployment_plan, …) appends a row here.  The ActivityLog UI
     reads this table to show the reviewer their full history queue.
     """
@@ -56,6 +56,10 @@ class ApprovalEvent(Base):
 
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Reviewer's comment — required for rejections, optional for approvals.
+
+    # ── Backlog context ─────────────────────────────────────────────────────
+    backlog_id: Mapped[str | None] = mapped_column(VARCHAR(255), nullable=True)
+    # Backlog UUID for epics/stories; None for PRDs and other artifact types.
 
     # ── Timestamp ───────────────────────────────────────────────────────────
     created_at: Mapped[datetime] = mapped_column(

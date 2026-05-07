@@ -54,6 +54,7 @@ def _write_approval_event(
     reviewed_by: str | None,
     comment: str | None,
     submitted_by: str | None = None,
+    backlog_id: str | None = None,
 ) -> None:
     """Append one row to approval_events (best-effort — never raises)."""
     try:
@@ -66,6 +67,7 @@ def _write_approval_event(
             submitted_by=submitted_by,
             reviewed_by=reviewed_by,
             comment=comment,
+            backlog_id=backlog_id,
         )
         session.add(event)
     except Exception:
@@ -219,6 +221,7 @@ def update_epic_status(
         reviewed_by=reviewed_by,
         comment=review_comment,
         submitted_by=submitted_by,
+        backlog_id=record.backlog_id,
     )
     session.flush()
     return record
@@ -293,6 +296,9 @@ def update_story_status(
         record.review_comment = review_comment
     if new_status in {"approved", "rejected"}:
         record.reviewed_at = datetime.now(timezone.utc)
+    # Fetch epic to get backlog_id
+    epic = session.get(GeneratedEpicRecord, record.epic_record_id)
+    backlog_id = epic.backlog_id if epic else None
     _write_approval_event(
         session,
         artifact_type="story",
@@ -303,6 +309,7 @@ def update_story_status(
         reviewed_by=reviewed_by,
         comment=review_comment,
         submitted_by=submitted_by,
+        backlog_id=backlog_id,
     )
     session.flush()
     return record
