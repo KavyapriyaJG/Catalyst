@@ -15,6 +15,7 @@ from backlog_generation.backlog_repository import (
     delete_backlog,
     get_backlog_with_epics,
     get_epic_with_stories,
+    get_story,
     list_backlogs,
     mark_epic_published,
     mark_story_published,
@@ -149,6 +150,14 @@ def get_epic(epic_record_id: str) -> dict | None:
         return _epic_to_dict(epic, include_stories=True)
 
 
+def get_story_by_id(story_record_id: str) -> dict | None:
+    with get_session() as session:
+        story = get_story(session, story_record_id)
+        if story is None:
+            return None
+        return _story_to_dict(story)
+
+
 def remove_backlog(backlog_id: str) -> bool:
     """Delete DB records and associated files. Returns False if not found."""
     settings = get_settings()
@@ -171,6 +180,7 @@ def set_epic_status(
     new_status: str,
     reviewed_by: str | None = None,
     review_comment: str | None = None,
+    submitted_by: str | None = None,
 ) -> dict:
     """Update epic status; propagates ValueError / FileNotFoundError."""
     with get_session() as session:
@@ -178,6 +188,7 @@ def set_epic_status(
             session, epic_record_id, new_status,
             reviewed_by=reviewed_by,
             review_comment=review_comment,
+            submitted_by=submitted_by,
         )
         return _epic_to_dict(rec, include_stories=False)
 
@@ -187,6 +198,7 @@ def set_story_status(
     new_status: str,
     reviewed_by: str | None = None,
     review_comment: str | None = None,
+    submitted_by: str | None = None,
 ) -> dict:
     """Update story status; propagates ValueError / FileNotFoundError."""
     with get_session() as session:
@@ -194,6 +206,7 @@ def set_story_status(
             session, story_record_id, new_status,
             reviewed_by=reviewed_by,
             review_comment=review_comment,
+            submitted_by=submitted_by,
         )
         return _story_to_dict(rec)
 

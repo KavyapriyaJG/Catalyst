@@ -14,6 +14,11 @@ class StatusUpdate(BaseModel):
     status: str
     reviewed_by: str | None = None
     review_comment: str | None = None
+    submitted_by: str | None = None
+
+
+class PublishRequest(BaseModel):
+    jira_key: str
 
 
 class StoryIn(BaseModel):
@@ -68,6 +73,56 @@ def delete_backlog(backlog_id: str):
     return {"deleted": backlog_id}
 
 
+@router.get(
+    "/{backlog_id}/epics/{epic_record_id}/stories",
+    summary="List all stories for an epic",
+)
+def list_stories(backlog_id: str, epic_record_id: str):
+    epic = backlog_service.get_epic(epic_record_id)
+    if epic is None:
+        raise HTTPException(status_code=404, detail=f"Epic record {epic_record_id!r} not found.")
+    return epic.get("stories", [])
+
+
+@router.get(
+    "/{backlog_id}/epics/{epic_record_id}/stories/{story_record_id}",
+    summary="Get a single story",
+)
+def get_story(backlog_id: str, epic_record_id: str, story_record_id: str):
+    story = backlog_service.get_story_by_id(story_record_id)
+    if story is None:
+        raise HTTPException(status_code=404, detail=f"Story record {story_record_id!r} not found.")
+    return story
+
+
+@router.post(
+    "/{backlog_id}/epics/{epic_record_id}/publish",
+    summary="Mark epic as synced to Jira with its Jira key",
+)
+def publish_epic(backlog_id: str, epic_record_id: str, body: PublishRequest):
+    try:
+        updated = backlog_service.publish_epic(epic_record_id, body.jira_key)
+    except FileNotFoundError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    return updated
+
+
+@router.post(
+    "/{backlog_id}/epics/{epic_record_id}/stories/{story_record_id}/publish",
+    summary="Mark story as synced to Jira with its Jira key",
+)
+def publish_story(backlog_id: str, epic_record_id: str, story_record_id: str, body: PublishRequest):
+    try:
+        updated = backlog_service.publish_story(story_record_id, body.jira_key)
+    except FileNotFoundError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    return updated
+
+
 @router.post(
     "/{backlog_id}/epics/{epic_record_id}/stories",
     summary="Save generated stories for an epic",
@@ -106,6 +161,7 @@ def update_epic_status(backlog_id: str, epic_record_id: str, body: StatusUpdate)
             body.status,
             reviewed_by=body.reviewed_by,
             review_comment=body.review_comment,
+            submitted_by=body.submitted_by,
         )
     except FileNotFoundError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
@@ -127,6 +183,7 @@ def update_story_status(
             body.status,
             reviewed_by=body.reviewed_by,
             review_comment=body.review_comment,
+            submitted_by=body.submitted_by,
         )
     except FileNotFoundError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
