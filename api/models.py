@@ -36,6 +36,7 @@ class JiraBulkPublishResponse(BaseModel):
 
 
 class PrdGenerateRequest(BaseModel):
+    prd_name: str | None = None
     input_path: str | None = None
     github_urls: list[str] | None = None
     documents: list[dict] | None = None
@@ -43,12 +44,14 @@ class PrdGenerateRequest(BaseModel):
 
 class PrdListItem(BaseModel):
     id: str
+    prd_name: str
     filename: str
     status: str | None = "draft"
 
 
 class PrdItem(BaseModel):
     id: str
+    prd_name: str
     filename: str
     content: dict
     generated_time: float

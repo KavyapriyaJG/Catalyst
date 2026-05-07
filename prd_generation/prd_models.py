@@ -21,6 +21,9 @@ class GeneratedPRDRecord(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
+    prd_name: Mapped[str] = mapped_column(
+        VARCHAR(255), nullable=False, server_default="Untitled PRD"
+    )
     source_files: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )

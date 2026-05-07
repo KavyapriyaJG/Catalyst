@@ -83,6 +83,12 @@ Ingestion and database configuration:
 Migrations are managed with [Alembic](https://alembic.sqlalchemy.org/).  
 `POSTGRES_DSN` must be set in `.env` (or exported in the shell) before running any migration command.
 
+```bash
+set -a 
+source .env 
+set +a     
+```
+
 **Apply all pending migrations (run after first clone or after schema changes):**
 
 ```bash

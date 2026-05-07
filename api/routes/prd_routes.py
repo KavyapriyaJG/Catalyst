@@ -50,6 +50,7 @@ def _resolve_prd_inputs(payload: PrdGenerateRequest) -> tuple[str | None, list[d
 
 async def _stream_prd_pipeline(
     input_path: str | None,
+    prd_name: str | None,
     github_urls: list[str] | None,
     documents: list[dict],
 ):
@@ -80,8 +81,8 @@ async def _stream_prd_pipeline(
 
     try:
         prd_json = pipeline_task.result()
-        prd_id, prd_json, filename = save_prd(prd_json)
-        yield f"event: complete\ndata: {json.dumps({'prd': prd_json, 'id': prd_id, 'filename': filename})}\n\n"
+        prd_id, prd_json, filename, stored_prd_name = save_prd(prd_json, prd_name=prd_name)
+        yield f"event: complete\ndata: {json.dumps({'prd': prd_json, 'id': prd_id, 'filename': filename, 'prd_name': stored_prd_name})}\n\n"
     except Exception as error:
         yield f"event: error\ndata: {json.dumps({'error': str(error)})}\n\n"
 
@@ -90,7 +91,7 @@ async def _stream_prd_pipeline(
 async def generate_prd_sse(payload: PrdGenerateRequest):
     input_path, parsed_documents = _resolve_prd_inputs(payload)
     return StreamingResponse(
-        _stream_prd_pipeline(input_path, payload.github_urls, parsed_documents),
+        _stream_prd_pipeline(input_path, payload.prd_name, payload.github_urls, parsed_documents),
         media_type="text/event-stream",
     )
 
@@ -105,11 +106,11 @@ async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
             await asyncio.sleep(delay)
 
         prd_dict = json.loads(DUMMY_PRD_TEXT)
-        prd_id, prd_json, filename = save_prd(prd_dict)
+        prd_id, prd_json, filename, stored_prd_name = save_prd(prd_dict, prd_name=_payload.prd_name)
         
         yield (
             f"event: complete\n"
-            f"data: {json.dumps({'prd': prd_json, 'id': prd_id, 'filename': filename})}\n\n"
+            f"data: {json.dumps({'prd': prd_json, 'id': prd_id, 'filename': filename, 'prd_name': stored_prd_name})}\n\n"
         )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

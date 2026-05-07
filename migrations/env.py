@@ -9,7 +9,7 @@ from alembic import context
 # the shared Base.metadata before autogenerate/upgrade runs.
 import backlog_generation.models  # noqa: F401  (registers issues/hierarchy/links)
 import backlog_generation.backlog_models  # noqa: F401  (registers backlogs/epics/stories)
-import approval.models  # noqa: F401  (registers approval_events)
+import backlog_generation.approval_models  # noqa: F401  (registers approval_events)
 from backlog_generation.models import Base
 
 # ── Alembic config ─────────────────────────────────────────────────────────────

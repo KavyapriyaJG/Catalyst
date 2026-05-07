@@ -65,11 +65,13 @@ def _write_prd_approval_event(
 
 def create_prd(
     session: Session,
+    prd_name: str,
     source_files: list[str],
     prd_content: dict[str, Any] | None = None,
 ) -> GeneratedPRDRecord:
     """Create and persist a new PRD record."""
     record = GeneratedPRDRecord(
+        prd_name=prd_name,
         source_files=source_files,
         status="draft",
         prd_content=prd_content or {},
@@ -84,6 +86,7 @@ def list_prds(session: Session) -> list[dict]:
     rows = session.execute(
         select(
             GeneratedPRDRecord.id,
+            GeneratedPRDRecord.prd_name,
             GeneratedPRDRecord.status,
             GeneratedPRDRecord.created_at,
             GeneratedPRDRecord.updated_at,
@@ -94,6 +97,7 @@ def list_prds(session: Session) -> list[dict]:
     return [
         {
             "id": str(r.id),
+            "prd_name": r.prd_name,
             "status": r.status,
             "created_at": r.created_at.isoformat(),
             "updated_at": r.updated_at.isoformat(),
@@ -152,13 +156,12 @@ def update_prd_status(
     if new_status in {"approved", "rejected"}:
         record.reviewed_at = datetime.now(timezone.utc)
     
-    # Generate PRD filename for display
-    prd_filename = f"prd_{record.created_at.strftime('%Y%m%d_%H%M%S')}" if record.created_at else f"prd_{prd_id}"
+    prd_name = record.prd_name or "Untitled PRD"
     
     _write_prd_approval_event(
         session,
         prd_id=prd_id,
-        prd_name=prd_filename,
+        prd_name=prd_name,
         from_status=from_status,
         to_status=new_status,
         reviewed_by=reviewed_by,

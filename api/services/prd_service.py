@@ -114,7 +114,11 @@ def extract_and_validate_documents(doc_refs: list[dict]) -> list[dict[str, str]]
     return documents
 
 
-def save_prd(prd_data: dict, source_files: list[str] | None = None) -> tuple[str, dict, str]:
+def save_prd(
+    prd_data: dict,
+    source_files: list[str] | None = None,
+    prd_name: str | None = None,
+) -> tuple[str, dict, str, str]:
     """Persist a PRD to database and disk as JSON, returning parsed structure.
 
     Args:
@@ -122,16 +126,19 @@ def save_prd(prd_data: dict, source_files: list[str] | None = None) -> tuple[str
         source_files: Optional list of source file names.
 
     Returns:
-        Tuple of (prd_id, prd_json, filename) where prd_id is the database record ID,
-        prd_json is the parsed content, and filename is the disk filename.
+        Tuple of (prd_id, prd_json, filename, prd_name) where prd_id is the database
+        record ID, prd_json is the parsed content, filename is the disk filename,
+        and prd_name is the stored display name.
     """
     # Use dict directly as JSON
     prd_json = prd_data if isinstance(prd_data, dict) else {"content": str(prd_data)}
+    normalized_prd_name = (prd_name or "").strip() or "Untitled PRD"
     
     # Store in database
     with get_session() as session:
         prd_record = create_prd(
             session,
+            prd_name=normalized_prd_name,
             source_files=source_files or [],
             prd_content=prd_json
         )
@@ -143,7 +150,7 @@ def save_prd(prd_data: dict, source_files: list[str] | None = None) -> tuple[str
     filename = f"prd_{timestamp}_{unique_id}.json"
     filepath = get_settings().GENERATED_PRDS_DIR / filename
     filepath.write_text(json.dumps(prd_json, indent=2))    
-    return prd_id, prd_json, filename
+    return prd_id, prd_json, filename, normalized_prd_name
 
 
 def list_prds() -> list[PrdListItem]:
@@ -153,6 +160,7 @@ def list_prds() -> list[PrdListItem]:
         return [
             PrdListItem(
                 id=str(prd['id']),
+                prd_name=prd.get('prd_name') or "Untitled PRD",
                 filename=f"prd_{datetime.fromisoformat(prd['created_at']).strftime('%Y%m%d_%H%M%S')}.json",
                 status=prd['status']
             )
@@ -179,6 +187,7 @@ def get_prd(prd_id: str) -> PrdItem:
         
         return PrdItem(
             id=str(prd_record.id),
+            prd_name=prd_record.prd_name or "Untitled PRD",
             filename=filename,
             content=ordered_content,
             generated_time=prd_record.created_at.timestamp() if prd_record.created_at else datetime.now().timestamp(),
