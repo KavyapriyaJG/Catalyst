@@ -45,13 +45,11 @@ def get_activity_submissions() -> list[dict]:
 
             submission = {
                 "id": event.artifact_id,
-                "record_id": event.artifact_id,
                 "name": event.artifact_name,
                 "submitter": event.submitted_by or "Catalyst Agent",
                 "date": event.created_at.isoformat(),
                 "type": event.artifact_type,
                 "status": status,
-                "backlog_id": event.backlog_id,
                 "reviewComment": event.comment,
                 "reviewedAt": event.created_at.isoformat() if status in {"approved", "rejected"} else None,
                 "reviewed_by": event.reviewed_by,

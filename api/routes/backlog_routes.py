@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.services import backlog_service
@@ -39,7 +39,6 @@ class StoriesWrapper(BaseModel):
     """Accepts { "stories": [...] } wrapper sent by the UI."""
     model_config = ConfigDict(extra="ignore")
     stories: List[StoryIn]
-
 
 @router.get("/", summary="List all backlogs")
 def list_backlogs():
