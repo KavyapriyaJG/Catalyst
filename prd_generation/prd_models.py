@@ -55,7 +55,7 @@ class GeneratedPRDRecord(Base):
 
 
 class PRDComment(Base):
-    """An inline comment (or reply) on a specific section of a PRD."""
+    """A top-level inline comment on a specific section of a PRD."""
 
     __tablename__ = "prd_comments"
 
@@ -74,12 +74,6 @@ class PRDComment(Base):
     section_title: Mapped[str] = mapped_column(Text, nullable=False)
     author: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
-    highlighted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    parent_id: Mapped[str | None] = mapped_column(
-        UUID(as_uuid=False),
-        ForeignKey("prd_comments.id", ondelete="CASCADE"),
-        nullable=True,
-    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -87,14 +81,47 @@ class PRDComment(Base):
     prd: Mapped["GeneratedPRDRecord"] = relationship(
         "GeneratedPRDRecord", back_populates="comments"
     )
-    replies: Mapped[list["PRDComment"]] = relationship(
-        "PRDComment",
-        back_populates="parent",
-        cascade="all",
-        passive_deletes=True,
+    replies: Mapped[list["PRDCommentReply"]] = relationship(
+        "PRDCommentReply", back_populates="comment",
+        cascade="all, delete-orphan",
     )
-    parent: Mapped["PRDComment | None"] = relationship(
-        "PRDComment",
-        back_populates="replies",
-        remote_side="PRDComment.id",
+
+
+class PRDCommentReply(Base):
+    """A reply (or nested reply) on a PRD comment."""
+
+    __tablename__ = "prd_comment_replies"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    comment_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("prd_comments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    author: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("prd_comment_replies.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    comment: Mapped["PRDComment"] = relationship(
+        "PRDComment", back_populates="replies"
+    )
+    replies: Mapped[list["PRDCommentReply"]] = relationship(
+        "PRDCommentReply", back_populates="parent",
+        cascade="all",
+    )
+    parent: Mapped["PRDCommentReply | None"] = relationship(
+        "PRDCommentReply", back_populates="replies",
+        remote_side="PRDCommentReply.id",
     )

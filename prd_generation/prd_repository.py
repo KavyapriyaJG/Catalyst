@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from prd_generation.prd_models import GeneratedPRDRecord, PRDComment
+from prd_generation.prd_models import GeneratedPRDRecord, PRDComment, PRDCommentReply
 from approval.models import ApprovalEvent
 
 # ---------------------------------------------------------------------------
@@ -213,6 +213,21 @@ def get_prd_approval_history(
 # ---------------------------------------------------------------------------
 
 
+def _reply_to_dict(reply):
+    return {
+        "id": str(reply.id),
+        "comment_id": str(reply.comment_id),
+        "author": reply.author,
+        "text": reply.text,
+        "parent_id": str(reply.parent_id) if reply.parent_id else None,
+        "created_at": reply.created_at.isoformat(),
+        "replies": sorted(
+            [_reply_to_dict(r) for r in (reply.replies or [])],
+            key=lambda r: r["created_at"],
+        ),
+    }
+
+
 def _comment_to_dict(comment):
     return {
         "id": str(comment.id),
@@ -221,11 +236,9 @@ def _comment_to_dict(comment):
         "section_title": comment.section_title,
         "author": comment.author,
         "text": comment.text,
-        "highlighted_text": comment.highlighted_text,
-        "parent_id": str(comment.parent_id) if comment.parent_id else None,
         "created_at": comment.created_at.isoformat(),
         "replies": sorted(
-            [_comment_to_dict(r) for r in (comment.replies or [])],
+            [_reply_to_dict(r) for r in (comment.replies or [])],
             key=lambda r: r["created_at"],
         ),
     }
@@ -238,19 +251,11 @@ def create_comment(
     section_title: str,
     author: str,
     text: str,
-    highlighted_text: str | None = None,
-    parent_id: str | None = None,
 ):
-    from prd_generation.prd_models import GeneratedPRDRecord, PRDComment
-
+    """Create a new top-level comment on a PRD section."""
     prd_record = session.get(GeneratedPRDRecord, prd_id)
     if prd_record is None:
         raise FileNotFoundError(f"PRD record {prd_id!r} not found.")
-
-    if parent_id is not None:
-        parent = session.get(PRDComment, parent_id)
-        if parent is None:
-            raise FileNotFoundError(f"Parent comment {parent_id!r} not found.")
 
     record = PRDComment(
         prd_id=prd_id,
@@ -258,7 +263,33 @@ def create_comment(
         section_title=section_title,
         author=author,
         text=text,
-        highlighted_text=highlighted_text,
+    )
+    session.add(record)
+    session.flush()
+    return record
+
+
+def create_reply(
+    session,
+    comment_id: str,
+    author: str,
+    text: str,
+    parent_id: str | None = None,
+):
+    """Create a reply (or nested reply) on a PRD comment."""
+    comment = session.get(PRDComment, comment_id)
+    if comment is None:
+        raise FileNotFoundError(f"Comment {comment_id!r} not found.")
+
+    if parent_id is not None:
+        parent = session.get(PRDCommentReply, parent_id)
+        if parent is None:
+            raise FileNotFoundError(f"Parent reply {parent_id!r} not found.")
+
+    record = PRDCommentReply(
+        comment_id=comment_id,
+        author=author,
+        text=text,
         parent_id=parent_id,
     )
     session.add(record)
@@ -268,13 +299,9 @@ def create_comment(
 
 def get_prd_comments(session, prd_id: str) -> list[dict]:
     """Return all top-level comments (with nested replies) for a PRD."""
-    from prd_generation.prd_models import PRDComment
-    from sqlalchemy import select
-
     stmt = (
         select(PRDComment)
         .where(PRDComment.prd_id == prd_id)
-        .where(PRDComment.parent_id.is_(None))
         .order_by(PRDComment.created_at.asc())
     )
     rows = session.scalars(stmt).all()
@@ -282,9 +309,15 @@ def get_prd_comments(session, prd_id: str) -> list[dict]:
 
 
 def delete_comment(session, comment_id: str) -> bool:
-    from prd_generation.prd_models import PRDComment
-
     record = session.get(PRDComment, comment_id)
+    if record is None:
+        return False
+    session.delete(record)
+    return True
+
+
+def delete_reply(session, reply_id: str) -> bool:
+    record = session.get(PRDCommentReply, reply_id)
     if record is None:
         return False
     session.delete(record)

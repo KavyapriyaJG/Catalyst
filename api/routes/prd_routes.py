@@ -20,7 +20,6 @@ class CreateCommentRequest(BaseModel):
     section_title: str
     author: str
     text: str
-    highlighted_text: str | None = None
     parent_id: str | None = None
 
 router = APIRouter(prefix="/prd", tags=["prd"])
@@ -194,7 +193,6 @@ def create_prd_comment(prd_id: str, body: CreateCommentRequest):
             section_title=body.section_title,
             author=body.author,
             text=body.text,
-            highlighted_text=body.highlighted_text,
             parent_id=body.parent_id,
         )
     except FileNotFoundError as error:

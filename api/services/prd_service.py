@@ -17,6 +17,7 @@ from prd_generation.prd_repository import (
     update_prd_status,
     get_prd_approval_history,
     create_comment,
+    create_reply,
     get_prd_comments,
     delete_comment,
 )
@@ -298,9 +299,6 @@ def extract_prds_as_documents(prd_ids: list[str]) -> list[dict[str, str]]:
 # PRD Comments
 # ---------------------------------------------------------------------------
 
-MAX_HIGHLIGHTED_TEXT_LENGTH = 100
-
-
 def list_comments(prd_id: str) -> list[dict]:
     """Get all top-level comments with nested replies for a PRD."""
     with get_session() as session:
@@ -313,27 +311,23 @@ def add_comment(
     section_title: str,
     author: str,
     text: str,
-    highlighted_text: str | None = None,
     parent_id: str | None = None,
 ) -> dict:
     """Create a new comment or reply on a PRD section."""
-    if highlighted_text and len(highlighted_text) > MAX_HIGHLIGHTED_TEXT_LENGTH:
-        highlighted_text = highlighted_text[:MAX_HIGHLIGHTED_TEXT_LENGTH] + "…"
-
     with get_session() as session:
-        record = create_comment(
-            session,
-            prd_id,
-            section_id,
-            section_title,
-            author,
-            text,
-            highlighted_text=highlighted_text,
-            parent_id=parent_id,
-        )
+        if parent_id is not None:
+            record = create_reply(session, parent_id, author, text)
+        else:
+            record = create_comment(
+                session, prd_id, section_id, section_title, author, text,
+            )
         session.commit()
-        from prd_generation.prd_repository import _comment_to_dict
-        return _comment_to_dict(record)
+        if parent_id is not None:
+            from prd_generation.prd_repository import _reply_to_dict
+            return _reply_to_dict(record)
+        else:
+            from prd_generation.prd_repository import _comment_to_dict
+            return _comment_to_dict(record)
 
 
 def remove_comment(comment_id: str) -> None:
