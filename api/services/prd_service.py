@@ -16,6 +16,9 @@ from prd_generation.prd_repository import (
     list_prds as db_list_prds,
     update_prd_status,
     get_prd_approval_history,
+    create_comment,
+    get_prd_comments,
+    delete_comment,
 )
 
 # Expected section order for PRD content
@@ -289,3 +292,54 @@ def extract_prds_as_documents(prd_ids: list[str]) -> list[dict[str, str]]:
         except FileNotFoundError:
             continue
     return documents
+
+
+# ---------------------------------------------------------------------------
+# PRD Comments
+# ---------------------------------------------------------------------------
+
+MAX_HIGHLIGHTED_TEXT_LENGTH = 100
+
+
+def list_comments(prd_id: str) -> list[dict]:
+    """Get all top-level comments with nested replies for a PRD."""
+    with get_session() as session:
+        return get_prd_comments(session, prd_id)
+
+
+def add_comment(
+    prd_id: str,
+    section_id: str,
+    section_title: str,
+    author: str,
+    text: str,
+    highlighted_text: str | None = None,
+    parent_id: str | None = None,
+) -> dict:
+    """Create a new comment or reply on a PRD section."""
+    if highlighted_text and len(highlighted_text) > MAX_HIGHLIGHTED_TEXT_LENGTH:
+        highlighted_text = highlighted_text[:MAX_HIGHLIGHTED_TEXT_LENGTH] + "…"
+
+    with get_session() as session:
+        record = create_comment(
+            session,
+            prd_id,
+            section_id,
+            section_title,
+            author,
+            text,
+            highlighted_text=highlighted_text,
+            parent_id=parent_id,
+        )
+        session.commit()
+        from prd_generation.prd_repository import _comment_to_dict
+        return _comment_to_dict(record)
+
+
+def remove_comment(comment_id: str) -> None:
+    """Delete a comment by ID."""
+    with get_session() as session:
+        deleted = delete_comment(session, comment_id)
+        if not deleted:
+            raise FileNotFoundError(f"Comment {comment_id!r} not found.")
+        session.commit()

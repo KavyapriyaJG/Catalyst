@@ -7,10 +7,21 @@ import re
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from pydantic import BaseModel
+
 from api.models import PrdGenerateRequest, PrdItem, PrdListItem, PrdStatusUpdate
 from dummy_prd_content import DUMMY_PRD_STREAM_EVENTS, DUMMY_PRD_TEXT
 from prd_generation.prd_generation_graph import run_prd_pipeline
-from api.services.prd_service import clone_repository, extract_and_validate_documents, get_prd, list_prds, save_prd, set_prd_status, get_prd_approvals
+from api.services.prd_service import clone_repository, extract_and_validate_documents, get_prd, list_prds, save_prd, set_prd_status, get_prd_approvals, list_comments, add_comment, remove_comment
+
+
+class CreateCommentRequest(BaseModel):
+    section_id: str
+    section_title: str
+    author: str
+    text: str
+    highlighted_text: str | None = None
+    parent_id: str | None = None
 
 router = APIRouter(prefix="/prd", tags=["prd"])
 
@@ -157,3 +168,43 @@ def get_prd_approval_history(prd_id: str):
         return get_prd_approvals(prd_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=f"PRD not found: {error}") from error
+
+
+# ---------------------------------------------------------------------------
+# PRD Comment endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{prd_id}/comments", summary="Get all comments for a PRD")
+def get_prd_comments_endpoint(prd_id: str):
+    """Return all top-level comments with nested replies, ordered by creation time."""
+    try:
+        return list_comments(prd_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.post("/{prd_id}/comments", status_code=201, summary="Add a comment or reply on a PRD")
+def create_prd_comment(prd_id: str, body: CreateCommentRequest):
+    """Create a new comment (or reply when parent_id is set) on a PRD section."""
+    try:
+        return add_comment(
+            prd_id,
+            section_id=body.section_id,
+            section_title=body.section_title,
+            author=body.author,
+            text=body.text,
+            highlighted_text=body.highlighted_text,
+            parent_id=body.parent_id,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.delete("/{prd_id}/comments/{comment_id}", status_code=204, summary="Delete a comment")
+def delete_prd_comment(prd_id: str, comment_id: str):
+    """Delete a comment by ID."""
+    try:
+        remove_comment(comment_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
