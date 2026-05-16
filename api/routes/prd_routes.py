@@ -1,8 +1,11 @@
 import asyncio
 import json
+import logging
 import os
 import queue as queue_module
 import re
+import traceback
+import uuid
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -23,6 +26,21 @@ class CreateCommentRequest(BaseModel):
     parent_id: str | None = None
 
 router = APIRouter(prefix="/prd", tags=["prd"])
+logger = logging.getLogger(__name__)
+
+
+def _resolve_priority_mode(payload: PrdGenerateRequest) -> str:
+    """Resolve mutually-exclusive source priority mode from request flags."""
+    if payload.prioritize_code and payload.prioritize_documents:
+        raise HTTPException(
+            status_code=400,
+            detail="Select only one priority toggle: prioritize_code or prioritize_documents",
+        )
+    if payload.prioritize_code:
+        return "code_high"
+    if payload.prioritize_documents:
+        return "docs_high"
+    return "auto_bias"
 
 def _resolve_prd_inputs(payload: PrdGenerateRequest) -> tuple[str | None, list[dict]]:
     """Validate and resolve the PRD request into an input_path and parsed documents.
@@ -63,6 +81,7 @@ async def _stream_prd_pipeline(
     prd_name: str | None,
     github_urls: list[str] | None,
     documents: list[dict],
+    priority_mode: str,
 ):
     """Async generator that runs the PRD pipeline and yields SSE-formatted messages."""
     event_queue: queue_module.Queue[str] = queue_module.Queue()
@@ -71,6 +90,7 @@ async def _stream_prd_pipeline(
             input_path=input_path,
             github_urls=github_urls,
             documents=documents,
+            priority_mode=priority_mode,
             event_queue=event_queue,
         )
     )
@@ -94,14 +114,30 @@ async def _stream_prd_pipeline(
         prd_id, prd_json, filename, stored_prd_name = save_prd(prd_json, prd_name=prd_name)
         yield f"event: complete\ndata: {json.dumps({'prd': prd_json, 'id': prd_id, 'filename': filename, 'prd_name': stored_prd_name})}\n\n"
     except Exception as error:
-        yield f"event: error\ndata: {json.dumps({'error': str(error)})}\n\n"
+        trace_id = str(uuid.uuid4())
+        tb = traceback.format_exc()
+        logger.error("PRD generation failed [trace_id=%s]: %s", trace_id, str(error))
+        logger.error("PRD generation traceback [trace_id=%s]\n%s", trace_id, tb)
+        error_payload = {
+            "error": str(error),
+            "error_type": type(error).__name__,
+            "trace_id": trace_id,
+        }
+        yield f"event: error\ndata: {json.dumps(error_payload)}\n\n"
 
 
 @router.post("/generate")
 async def generate_prd_sse(payload: PrdGenerateRequest):
+    priority_mode = _resolve_priority_mode(payload)
     input_path, parsed_documents = _resolve_prd_inputs(payload)
     return StreamingResponse(
-        _stream_prd_pipeline(input_path, payload.prd_name, payload.github_urls, parsed_documents),
+        _stream_prd_pipeline(
+            input_path,
+            payload.prd_name,
+            payload.github_urls,
+            parsed_documents,
+            priority_mode,
+        ),
         media_type="text/event-stream",
     )
 
@@ -109,6 +145,7 @@ async def generate_prd_sse(payload: PrdGenerateRequest):
 @router.post("/generate/dummy")
 async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
     """Dummy endpoint that replays the real /prd/generate SSE stream with artificial delays."""
+    _ = _resolve_priority_mode(_payload)
 
     async def event_generator():
         for msg, delay in DUMMY_PRD_STREAM_EVENTS:

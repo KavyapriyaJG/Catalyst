@@ -6,6 +6,10 @@ class AgentState(TypedDict):
     input_path: str | None
     github_urls: list[str] | None
     documents: list[dict] | None
+    priority_mode: str
+    code_priority: int
+    docs_priority: int
+    priority_reason: str
 
     # Analysis results
     code_analysis: str | None

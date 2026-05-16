@@ -1,6 +1,7 @@
 import git
 import shutil
 import uuid
+import re
 from datetime import datetime
 import json
 from pathlib import Path
@@ -36,6 +37,34 @@ EXPECTED_SECTION_ORDER = [
 ]
 
 
+def _strip_repeated_heading(section_title: str, content: str) -> str:
+    """Remove repeated heading text at the start of a section body.
+
+    Examples removed:
+    - "Executive Summary\n\n..."
+    - "# Executive Summary\n\n..."
+    - "## Executive Summary:\n..."
+    """
+    if not isinstance(content, str):
+        return content
+
+    cleaned = content.strip()
+    escaped_title = re.escape(section_title)
+    heading_pattern = re.compile(
+        rf"^(?:#{{0,6}}\s*)?{escaped_title}\s*:?\s*(?:\n+|$)",
+        flags=re.IGNORECASE,
+    )
+
+    # Remove the repeated heading if it appears at the start; run twice to handle double repeats.
+    for _ in range(2):
+        match = heading_pattern.match(cleaned)
+        if not match:
+            break
+        cleaned = cleaned[match.end():].lstrip()
+
+    return cleaned
+
+
 def order_prd_sections(prd_dict: dict) -> dict:
     """Reorder and format PRD dict keys to match expected section order.
     
@@ -56,10 +85,15 @@ def order_prd_sections(prd_dict: dict) -> dict:
     # Add sections in expected order
     for section in EXPECTED_SECTION_ORDER:
         if section in normalized:
-            ordered[section] = normalized[section]
+            value = normalized[section]
+            if isinstance(value, str):
+                value = _strip_repeated_heading(section, value)
+            ordered[section] = value
     
     for key, value in normalized.items():
         if key not in ordered:
+            if isinstance(value, str):
+                value = _strip_repeated_heading(key, value)
             ordered[key] = value
     
     return ordered

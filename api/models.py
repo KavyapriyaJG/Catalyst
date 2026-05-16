@@ -40,6 +40,8 @@ class PrdGenerateRequest(BaseModel):
     input_path: str | None = None
     github_urls: list[str] | None = None
     documents: list[dict] | None = None
+    prioritize_code: bool = False
+    prioritize_documents: bool = False
 
 
 class PrdListItem(BaseModel):

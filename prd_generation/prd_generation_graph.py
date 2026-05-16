@@ -15,6 +15,25 @@ from prd_generation.state import AgentState
 from prd_generation.llm import clear_llm_cache
 
 
+_SECONDARY_PRIORITY = 60
+
+
+def _resolve_effective_priorities(priority_mode: str, has_code: bool, has_docs: bool) -> tuple[int, int, str]:
+    """Resolve effective code/docs priorities from mode and available sources."""
+    if has_code and has_docs:
+        if priority_mode == "code_high":
+            return 100, _SECONDARY_PRIORITY, "Code prioritized; documents still included"
+        if priority_mode == "docs_high":
+            return _SECONDARY_PRIORITY, 100, "Documents prioritized; code still included"
+        return 100, 100, "Auto-bias pending: waiting for analyzed content"
+
+    if has_code:
+        return 100, 0, "Only code input available"
+    if has_docs:
+        return 0, 100, "Only document input available"
+    return 0, 0, "No valid input source available"
+
+
 # =========================
 # MERGE + ROUTING NODES
 # =========================
@@ -24,26 +43,92 @@ def merge_analysis(s: AgentState):
     print("\n[Step 1.5/4] Merging analyses...")
     code_analysis = s.get("code_analysis")
     doc_analysis = s.get("document_analysis")
+    code_priority = int(s.get("code_priority", 100))
+    docs_priority = int(s.get("docs_priority", 100))
+    priority_mode = s.get("priority_mode", "auto_bias")
+    priority_reason = s.get("priority_reason", "")
+
+    if code_analysis and doc_analysis and priority_mode == "auto_bias":
+        code_len = max(len(code_analysis), 1)
+        docs_len = max(len(doc_analysis), 1)
+
+        if code_len >= docs_len:
+            code_priority = 100
+            docs_priority = max(40, int(round((docs_len / code_len) * 100)))
+            priority_reason = (
+                "Auto bias from analysis content length: "
+                f"code={code_len} chars, docs={docs_len} chars"
+            )
+        else:
+            docs_priority = 100
+            code_priority = max(40, int(round((code_len / docs_len) * 100)))
+            priority_reason = (
+                "Auto bias from analysis content length: "
+                f"docs={docs_len} chars, code={code_len} chars"
+            )
+
+    print(
+        f"   Source priority mode: {priority_mode} "
+        f"(code={code_priority}, docs={docs_priority})"
+    )
+    if priority_reason:
+        print(f"   Priority rationale: {priority_reason}")
 
     if code_analysis and doc_analysis:
         merged = {
             "source": "code_and_documents",
+            "priority_mode": priority_mode,
+            "code_priority": code_priority,
+            "docs_priority": docs_priority,
+            "priority_reason": priority_reason,
             "code_insights": code_analysis[:500] + "..." if len(code_analysis) > 500 else code_analysis,
             "document_insights": doc_analysis[:500] + "..." if len(doc_analysis) > 500 else doc_analysis,
             "full_code_analysis": code_analysis,
             "full_document_analysis": doc_analysis,
         }
         print("   Merged both analyses (source: code_and_documents)")
-        return {"analysis": merged}
+        return {
+            "analysis": merged,
+            "code_priority": code_priority,
+            "docs_priority": docs_priority,
+            "priority_reason": priority_reason,
+        }
     elif code_analysis:
         print("   Using code analysis only (source: code_only)")
-        return {"analysis": {"source": "code_only", "analysis": code_analysis}}
+        return {
+            "analysis": {
+                "source": "code_only",
+                "analysis": code_analysis,
+                "priority_mode": priority_mode,
+                "code_priority": code_priority,
+                "docs_priority": docs_priority,
+                "priority_reason": priority_reason,
+            }
+        }
     elif doc_analysis:
         print("   Using document analysis only (source: documents_only)")
-        return {"analysis": {"source": "documents_only", "analysis": doc_analysis}}
+        return {
+            "analysis": {
+                "source": "documents_only",
+                "analysis": doc_analysis,
+                "priority_mode": priority_mode,
+                "code_priority": code_priority,
+                "docs_priority": docs_priority,
+                "priority_reason": priority_reason,
+            }
+        }
     else:
         print("   No analysis available")
-        return {"analysis": {"source": "none", "message": "No analysis available"}}
+        return {
+            "analysis": {
+                "source": "none",
+                "message": "No analysis available",
+                "priority_mode": priority_mode,
+                "code_priority": code_priority,
+                "docs_priority": docs_priority,
+                "priority_reason": priority_reason,
+            }
+        }
 
 
 
@@ -175,6 +260,7 @@ async def run_prd_pipeline(
     input_path: str = None,
     github_urls: list = None,
     documents: list = None,
+    priority_mode: str = "auto_bias",
     event_queue: queue_module.Queue = None
 ) -> Dict[str, Any]:
     """Run the PRD pipeline with code, documents, or both inputs.
@@ -183,6 +269,7 @@ async def run_prd_pipeline(
         input_path: Local directory path for code analysis
         github_urls: List of GitHub URLs for code analysis
         documents: List of uploaded documents [{id, name, file_content}, ...]
+        priority_mode: code_high, docs_high, or auto_bias
         event_queue: Queue for SSE streaming of progress messages
     """
     clear_llm_cache()
@@ -197,10 +284,28 @@ async def run_prd_pipeline(
         logging.getLogger("httpx").addHandler(log_handler)
 
     try:
+        has_code = bool(input_path or (github_urls or []))
+        has_docs = bool(documents or [])
+        effective_code_priority, effective_docs_priority, priority_reason = _resolve_effective_priorities(
+            priority_mode=priority_mode,
+            has_code=has_code,
+            has_docs=has_docs,
+        )
+
+        print("\n[Priority] Resolved source priorities")
+        print(f"   Mode: {priority_mode}")
+        print(f"   Code priority: {effective_code_priority}")
+        print(f"   Docs priority: {effective_docs_priority}")
+        print(f"   Note: {priority_reason}")
+
         initial_state = {
             "input_path": input_path,
             "github_urls": github_urls or [],
             "documents": documents or [],
+            "priority_mode": priority_mode,
+            "code_priority": effective_code_priority,
+            "docs_priority": effective_docs_priority,
+            "priority_reason": priority_reason,
             "code_analysis": None,
             "document_analysis": None,
             "analysis": {},
