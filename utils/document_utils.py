@@ -65,25 +65,58 @@ def get_embeddings() -> Any:
 
 
 def extract_document_content(filepath: Path) -> str:
-    """Extract text content from various document formats."""
+    """
+    Extract text content from various document formats.
+    
+    Supports: PDF (all pages), DOCX, TXT, and other text formats.
+    Used centrally by all agents (PRD, backlog, modernization) for document context.
+    
+    Args:
+        filepath: Path to the document file
+    
+    Returns:
+        Full extracted text content
+    
+    Raises:
+        ValueError: If file cannot be read or format is not supported
+    """
+    if not filepath.exists():
+        raise ValueError(f"File not found: {filepath}")
+    
     try:
-        if filepath.suffix.lower() == ".pdf":
+        suffix = filepath.suffix.lower()
+        text = None
+        
+        if suffix == ".pdf":
             text_content = []
             with open(filepath, "rb") as pdf_file:
                 pdf_reader = PyPDF2.PdfReader(pdf_file)
                 for page in pdf_reader.pages:
-                    text_content.append(page.extract_text())
-            return "\n".join(text_content)
-        elif filepath.suffix.lower() == ".docx":
+                    extracted = page.extract_text()
+                    if extracted:
+                        text_content.append(extracted)
+            text = "\n".join(text_content)
+        
+        elif suffix == ".docx":
             doc = DocxDocument(filepath)
-            return "\n".join(paragraph.text for paragraph in doc.paragraphs)
+            text = "\n".join(paragraph.text for paragraph in doc.paragraphs)
+        
         else:
+            # Fallback for TXT and other text formats
             try:
-                return filepath.read_text(encoding="utf-8")
+                text = filepath.read_text(encoding="utf-8")
             except UnicodeDecodeError:
-                return filepath.read_text(encoding="latin-1", errors="ignore")
+                text = filepath.read_text(encoding="latin-1", errors="ignore")
+        
+        if not text:
+            raise ValueError(f"No text content found in {filepath.name}")
+        
+        return text
+    
     except Exception as e:
-        raise ValueError(f"Failed to extract content from {filepath.name}: {str(e)}")
+        if not isinstance(e, ValueError):
+            raise ValueError(f"Failed to extract content from {filepath.name}: {str(e)}")
+        raise
 
 
 def retrieve_context(query: str, documents: List[Document], top_k: int = 6) -> str:

@@ -6,6 +6,7 @@ from api.routes.backlog_routes import StatusUpdate
 from api.services import backlog_service
 from api.services import activity_service
 from api.services import prd_service
+from api.services import modernization_service
 
 router = APIRouter(prefix="/activity", tags=["activity"])
 
@@ -29,7 +30,7 @@ def list_planning_activities():
 def update_artifact_status(artifact_type: str, artifact_id: str, body: StatusUpdate):
     """Update status for any supported artifact type using a single artifact id.
 
-    Supported artifact types: epic, story, prd.
+    Supported artifact types: epic, story, prd, modernization.
     """
     normalized_type = artifact_type.strip().lower()
     try:
@@ -56,11 +57,19 @@ def update_artifact_status(artifact_type: str, artifact_id: str, body: StatusUpd
                 reviewed_by=body.reviewed_by,
                 review_comment=body.review_comment,
             )
+        if normalized_type == "modernization":
+            action = "approve" if body.status == "approved" else "reject"
+            return modernization_service.review_modernization_doc(
+                artifact_id,
+                action=action,
+                reviewed_by=body.reviewed_by or "Unknown",
+                comment=body.review_comment or "",
+            )
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Unsupported artifact_type {artifact_type!r}. "
-                "Supported types: epic, story, prd."
+                "Supported types: epic, story, prd, modernization."
             ),
         )
     except FileNotFoundError as err:
