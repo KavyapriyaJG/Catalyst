@@ -78,6 +78,7 @@ def review_modernization_blueprint(state: Dict[str, Any]) -> Dict[str, Any]:
     update = {
         "review": parsed,
         "score": score,
+        "iteration": iteration,
     }
     
     prev_best = state.get("best_score", 0)

@@ -1,194 +1,93 @@
-"""Output formatter for modernization document sections."""
+"""
+Modernization Output Formatter - Ensures LLM generates structured blueprint instead of freeform text
+"""
 
-from pydantic import BaseModel, Field
-from typing import Optional
-
-
-class ModernizationSection(BaseModel):
-    """Structured modernization document section."""
-    section_id: str = Field(description="Unique section identifier (e.g., executive_summary)")
-    title: str = Field(description="Human-readable section title")
-    content: str = Field(description="Section content (plain text with markdown support)")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "section_id": "executive_summary",
-                "title": "Executive Summary",
-                "content": "Business drivers and key benefits..."
-            }
-        }
+import json
+import re
+from typing import Any, Dict
 
 
-class ModernizationDocumentOutput(BaseModel):
-    """Complete modernization document output with all sections."""
-    doc_id: str = Field(description="Document ID")
-    doc_name: str = Field(description="Document name")
-    sections: list[ModernizationSection] = Field(description="All modernization sections")
-    metadata: dict = Field(default_factory=dict, description="Additional metadata")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "doc_id": "mod-123",
-                "doc_name": "Platform Modernization Initiative",
-                "sections": [
-                    {
-                        "section_id": "executive_summary",
-                        "title": "Executive Summary",
-                        "content": "..."
-                    }
-                ],
-                "metadata": {"generated_at": "2026-05-18T10:00:00Z"}
-            }
-        }
-
-
-# Predefined section templates with titles, descriptions, and guidelines
-# Focused on technical migration strategy with explicit AWS 7Rs framework
-SECTION_TEMPLATES = {
-    "executive_summary": {
-        "title": "Executive Summary",
-        "description": "Business drivers for modernization, strategic goals, expected outcomes, and value proposition",
-        "guidelines": """- Define why modernization is critical (technical debt, business constraints, compliance)
-- State strategic modernization goals and success criteria
-- Summarize expected business outcomes and benefits
-- Highlight key technical or operational improvements
-- Outline scope and transformation approach at high level""",
+# JSON Schema for Modernization output - 8 markdown sections
+MODERNIZATION_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "1. EXECUTIVE SUMMARY": {"type": "string", "description": "Goals and expected benefits (markdown)"},
+        "2. CURRENT STATE (AS-IS)": {"type": "string", "description": "Major modules, databases, integrations (markdown)"},
+        "3. MODERNIZATION STRATEGY (7Rs)": {"type": "string", "description": "Rehost/Replatform/Refactor/Rearchitect approach (markdown)"},
+        "4. TARGET ARCHITECTURE (TO-BE)": {"type": "string", "description": "New technology stack and architecture (markdown)"},
+        "5. DATA MODERNIZATION": {"type": "string", "description": "Database migration and data transformation (markdown)"},
+        "6. MIGRATION ROADMAP": {"type": "string", "description": "Phase-by-phase migration plan (markdown)"},
+        "7. RISKS & MITIGATION": {"type": "string", "description": "Key risks and mitigation strategies (markdown)"},
+        "8. NEXT STEPS": {"type": "string", "description": "Immediate actions and decision points (markdown)"}
     },
-    "current_state_assessment": {
-        "title": "Current State Assessment (AS-IS)",
-        "description": "Inventory of legacy systems, modules, components, dependencies, pain points, and technical debt",
-        "guidelines": """- Document core legacy systems/modules and their functions
-- Describe current technology stack, databases, and integrations
-- Identify system interdependencies and data flows
-- List pain points, scalability issues, and technical debt
-- Assess maintainability, performance bottlenecks, and complexity hotspots
-- Document any compliance or security gaps""",
-    },
-    "modernization_strategy": {
-        "title": "Modernization Strategy (7Rs Assessment)",
-        "description": "Detailed 7Rs evaluation for each system/module with rationale and approach selection",
-        "guidelines": """- For each major system/module, evaluate all 7Rs:
-  * **Rehost**: Lift & shift to cloud as-is
-  * **Replatform**: Lift, tinker & shift (minimal refactoring)
-  * **Refactor/Re-architect**: Modernize code/architecture for cloud
-  * **Repurchase**: Replace with SaaS/COTS solution
-  * **Retire**: Decommission unnecessary systems
-  * **Retain**: Keep on-premises or as-is
-  * **Re-invest**: Enhance for strategic advantage
-- Justify the selected 7R for each component
-- Document trade-offs and constraints
-- Identify dependencies and integration concerns""",
-    },
-    "target_architecture": {
-        "title": "Target Architecture (TO-BE)",
-        "description": "Future state technology architecture, cloud design, microservices, APIs, and deployment model",
-        "guidelines": """- Design target cloud/modern architecture
-- Define service boundaries and microservices approach
-- Specify technology stack choices (languages, frameworks, databases)
-- Document API design and integration patterns
-- Describe deployment model (containers, serverless, hybrid)
-- Address scalability, resilience, and high-availability design
-- Map business capabilities to technical services""",
-    },
-    "data_modernization": {
-        "title": "Data Modernization Strategy",
-        "description": "Data migration approach, schema mapping, transformation rules, and data validation",
-        "guidelines": """- Inventory legacy data structures, copybooks, and databases
-- Define data mapping from legacy to target systems
-- Document transformation and cleansing rules
-- Address data quality and reconciliation approach
-- Specify data migration method (batch, CDC, real-time sync)
-- Define cut-over strategy and data validation checkpoints
-- Document rollback procedures for data issues""",
-    },
-    "migration_roadmap": {
-        "title": "Migration Roadmap & Phasing",
-        "description": "Phase-wise migration plan, execution sequencing, coexistence strategy, and cutover approach",
-        "guidelines": """- Define migration phases and wave sequencing
-- Identify quick wins and pilot candidates
-- Document dependencies between phases
-- Plan parallel run and coexistence periods
-- Specify system cutover sequence and timing
-- Address fallback and rollback procedures
-- Define success criteria for each phase completion""",
-    },
-    "risks_and_mitigation": {
-        "title": "Risks & Mitigation",
-        "description": "Technical, operational, and business risks with mitigation strategies and contingency plans",
-        "guidelines": """- Identify major technical risks (compatibility, performance, data integrity)
-- Document operational risks (downtime, support gaps, skills)
-- List business risks (cost overruns, schedule delays, adoption)
-- For each risk, define:
-  * Risk probability and impact
-  * Mitigation strategy and preventive actions
-  * Contingency plan if risk materializes
-  * Owner and monitoring approach
-- Prioritize risks by severity
-- Define escalation procedures for critical issues""",
-    },
+    "required": [
+        "1. EXECUTIVE SUMMARY",
+        "2. CURRENT STATE (AS-IS)",
+        "3. MODERNIZATION STRATEGY (7Rs)",
+        "4. TARGET ARCHITECTURE (TO-BE)",
+        "5. DATA MODERNIZATION",
+        "6. MIGRATION ROADMAP",
+        "7. RISKS & MITIGATION",
+        "8. NEXT STEPS"
+    ]
 }
 
 
-def get_section_title(section_id: str) -> str:
-    """Get human-readable title for a section ID."""
-    return SECTION_TEMPLATES.get(section_id, {}).get("title", section_id.replace("_", " ").title())
-
-
-def format_section_for_display(section_id: str, content: str) -> dict:
-    """Format section content for UI display."""
-    return {
-        "section_id": section_id,
-        "title": get_section_title(section_id),
-        "content": content,
-    }
-
-
-def format_document_for_storage(
-    doc_id: str,
-    doc_name: str,
-    sections: dict[str, str],
-) -> dict:
+def get_json_output_format_instructions() -> str:
     """
-    Format document sections for database storage.
-    
-    Args:
-        doc_id: Document identifier
-        doc_name: Document name
-        sections: Dictionary of section_id -> content
-    
-    Returns:
-        Dictionary formatted for JSONB storage
+    Returns instructions to force JSON output with 8 markdown sections.
     """
-    formatted_sections = {}
-    for section_id, content in sections.items():
-        formatted_sections[section_id] = {
-            "title": get_section_title(section_id),
-            "content": content,
-        }
-    
-    return {
-        "doc_id": doc_id,
-        "doc_name": doc_name,
-        "sections": formatted_sections,
-        "metadata": {
-            "total_sections": len(sections),
-        }
-    }
+    return f"""
+CRITICAL: Output ONLY valid JSON (no markdown, no code fences, no text before/after):
+
+{json.dumps(MODERNIZATION_JSON_SCHEMA, indent=2)}
+
+RULES:
+1. Response must be a single JSON object with exactly these 8 keys (all required)
+2. All values are markdown strings (use markdown formatting for content)
+3. No code fences, no explanations, no extra text
+4. All JSON must be valid (proper escaping, balanced braces)
+5. Keys must match exactly: use the numbered section titles
+6. Include evidence tags [CONFIRMED], [INFERRED], [UNKNOWN] where appropriate
+"""
 
 
-def format_sections_as_record(sections: dict[str, str]) -> dict[str, str]:
-    """
-    Convert sections to the Record<string, string> format used by UI.
+def extract_json_from_response(response_text: str) -> Dict[str, Any]:
+    """Extract JSON from response. All field values are markdown strings."""
+    stripped = response_text.strip()
     
-    Args:
-        sections: Dictionary of section_id -> content
+    # Remove markdown code fences if present
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
     
-    Returns:
-        Dictionary of title -> content for UI rendering
-    """
-    return {
-        get_section_title(section_id): content
-        for section_id, content in sections.items()
-    }
+    # Find JSON object
+    json_match = re.search(r'\{.*\}', stripped, re.DOTALL)
+    if json_match:
+        stripped = json_match.group(0)
+    
+    try:
+        parsed = json.loads(stripped)
+        return parsed
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse JSON from response: {e}\nContent: {stripped[:200]}")
+
+
+def validate_modernization_sections(data: Dict[str, Any]) -> bool:
+    """Validate that all required modernization sections are present."""
+    required_keys = set(MODERNIZATION_JSON_SCHEMA["required"])
+    provided_keys = set(data.keys())
+    
+    if required_keys != provided_keys:
+        missing = required_keys - provided_keys
+        extra = provided_keys - required_keys
+        raise ValueError(f"Schema mismatch. Missing: {missing}, Extra: {extra}")
+    
+    # Validate each section has content
+    for key in required_keys:
+        if not isinstance(data[key], str) or not data[key].strip():
+            raise ValueError(f"Section '{key}' is empty or not a string")
+    
+    return True

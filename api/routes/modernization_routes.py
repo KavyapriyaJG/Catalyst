@@ -1,7 +1,6 @@
 """FastAPI routes for modernization document management."""
 
 import asyncio
-import base64
 import json
 import queue as queue_module
 import traceback
@@ -23,7 +22,6 @@ from api.schemas.modernization_schemas import (
     ModernizationGenerateRequest,
 )
 from api.services import modernization_service
-from modernization.utils.generator import generate_docx_export
 from modernization.agents.agent import generate_modernization_doc
 from backlog_generation.db import get_session
 from modernization.models import ModernizationDocRecord
@@ -168,13 +166,16 @@ async def generate_modernization_doc_sse(payload: ModernizationGenerateRequest):
         try:
             generation_result = await generation_task
             if isinstance(generation_result, dict):
-                blueprint_str = generation_result.get("blueprint", "")
-            elif isinstance(generation_result, str):
-                blueprint_str = generation_result
+                blueprint_data = generation_result.get("blueprint", {})
             else:
-                blueprint_str = ""
+                blueprint_data = {}
             
-            parsed_sections = parse_blueprint_to_sections(blueprint_str) if blueprint_str else {}
+            if isinstance(blueprint_data, dict):
+                parsed_sections = blueprint_data
+            elif isinstance(blueprint_data, str) and blueprint_data:
+                parsed_sections = parse_blueprint_to_sections(blueprint_data)
+            else:
+                parsed_sections = {}
             
             with get_session() as session:
                 db_doc = session.query(ModernizationDocRecord).filter(ModernizationDocRecord.id == doc_id).first()
@@ -347,24 +348,70 @@ def review_modernization_doc(
 
 
 @router.get("/{doc_id}/export")
-def export_modernization_docx(
+def export_modernization_markdown(
     doc_id: str,
     include_generated: bool = Query(True),
 ):
-    """Export modernization document as DOCX."""
+    """Export modernization document as markdown (for frontend DOCX conversion)."""
     doc = modernization_service.get_modernization_doc(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Modernization document not found")
     
     try:
-        with get_session() as session:
-            db_doc = session.query(ModernizationDocRecord).filter(ModernizationDocRecord.id == doc_id).first()
-            docx_bytes = generate_docx_export(db_doc, include_generated, session)
+        # Build markdown content
+        lines = [f"# {doc.name}"]
+        lines.append("")
+        
+        if doc.description:
+            lines.append(f"**Overview:** {doc.description}")
+            lines.append("")
+        
+        lines.append(f"**Status:** {doc.status.upper()}")
+        lines.append(f"**Created:** {doc.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"**Last Updated:** {doc.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        if doc.submitted_by:
+            lines.append(f"**Submitted By:** {doc.submitted_by}")
+        lines.append("")
+        
+        if doc.modernization_goals:
+            lines.append("## Modernization Goals")
+            lines.append(doc.modernization_goals)
+            lines.append("")
+        
+        if doc.linked_prds:
+            lines.append("## Linked Requirements")
+            for prd_id in doc.linked_prds:
+                lines.append(f"- {prd_id}")
+            lines.append("")
+        
+        if doc.source_assets:
+            lines.append("## Supporting Documentation")
+            for asset in doc.source_assets:
+                filename = asset.filename if hasattr(asset, "filename") else asset.get("filename", "unknown")
+                size = asset.size if hasattr(asset, "size") else asset.get("size", 0)
+                size_mb = f"{size / (1024*1024):.2f} MB" if size > 0 else "0 MB"
+                lines.append(f"- {filename} ({size_mb})")
+            lines.append("")
+        
+        if include_generated and doc.generated_sections:
+            for section_title, section_content in doc.generated_sections.items():
+                if section_content:
+                    lines.append(f"## {section_title}")
+                    lines.append(str(section_content))
+                    lines.append("")
+        
+        if doc.reviewed_by:
+            lines.append("## Approval & Sign-Off")
+            lines.append(f"**Reviewed by:** {doc.reviewed_by}")
+            lines.append(f"**Review Status:** {doc.status.upper()}")
+            if doc.review_comment:
+                lines.append(f"**Comments:** {doc.review_comment}")
+        
+        markdown_content = "\n".join(lines)
         
         return {
-            "filename": f"modernization_{doc.id}.docx",
-            "docx_base64": base64.b64encode(docx_bytes).decode("utf-8"),
-            "size": len(docx_bytes),
+            "filename": f"modernization_{doc.id}.md",
+            "markdown": markdown_content,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")

@@ -12,14 +12,15 @@ from langgraph.graph import START, END, StateGraph
 from typing_extensions import TypedDict
 
 from config import get_settings
-from modernization.prompt import MODERNIZATION_BLUEPRINT_PROMPT
+from modernization.prompt import get_modernization_blueprint_prompt
+from modernization.output_formatter import extract_json_from_response, validate_modernization_sections
 from modernization.agents.reviewer import review_modernization_blueprint
 from modernization.agents.reconciler import reconcile_modernization_blueprint
 from backlog_generation.db import get_session
 from prd_generation.prd_repository import get_prd
 
 
-_EMPTY_BLUEPRINT = "# Modernization Blueprint\n\nBlueprint generation failed"
+_EMPTY_BLUEPRINT = {}
 
 
 def get_claude_client():
@@ -106,7 +107,7 @@ def generate_modernization_blueprint(state: ModernizationState) -> dict[str, Any
                 prd_context += str(content)
     
     client = get_claude_client()
-    prompt_text = MODERNIZATION_BLUEPRINT_PROMPT.format(
+    prompt_text = get_modernization_blueprint_prompt(
         prd_summary=prd_context,
         legacy_analysis=f"PRDs: {', '.join(prd_names)}" if prd_names else "No PRDs provided",
         backlog_context=f"Goals: {state.get('modernization_goals', 'Not specified')}",
@@ -116,25 +117,16 @@ def generate_modernization_blueprint(state: ModernizationState) -> dict[str, Any
         message = client.invoke([HumanMessage(content=prompt_text)])
     except Exception as e:
         print(f"   Error: Claude invocation failed: {e}")
-        state["blueprint"] = _EMPTY_BLUEPRINT
+        state["blueprint"] = {}
         return state
     
     try:
-        parsed = json.loads(message.content)
-        if isinstance(parsed, dict) and 'blueprint' in parsed:
-            blueprint_value = parsed['blueprint']
-            if isinstance(blueprint_value, dict) and 'markdown' in blueprint_value:
-                blueprint = blueprint_value['markdown']
-            elif isinstance(blueprint_value, dict):
-                blueprint = json.dumps(blueprint_value)
-            else:
-                blueprint = str(blueprint_value)
-        else:
-            blueprint = message.content
-    except json.JSONDecodeError:
-        blueprint = message.content
-    
-    state["blueprint"] = blueprint
+        parsed = extract_json_from_response(message.content)
+        validate_modernization_sections(parsed)
+        state["blueprint"] = parsed
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"   JSON parsing error: {e}")
+        state["blueprint"] = _EMPTY_BLUEPRINT
     
     return state
 
@@ -214,7 +206,7 @@ async def generate_modernization_doc(
                     source_assets=source_assets or [],
                     messages=[],
                     analysis=analysis or {},
-                    blueprint="",
+                    blueprint={},
                     review=None,
                     score=0,
                     best_score=0,
@@ -225,7 +217,7 @@ async def generate_modernization_doc(
             
             if result["score"] >= 80:
                 blueprint = result["blueprint"]
-            elif result.get("best_blueprint") is not None and result.get("best_blueprint") != "" and result.get("best_score", 0) > 0:
+            elif result.get("best_blueprint") and result.get("best_score", 0) > 0:
                 blueprint = result["best_blueprint"]
             else:
                 blueprint = result["blueprint"]

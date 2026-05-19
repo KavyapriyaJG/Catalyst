@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from config import get_settings
 from modernization.prompt import MODERNIZATION_RECONCILER_PROMPT
+from modernization.output_formatter import extract_json_from_response, validate_modernization_sections
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage
 
@@ -55,28 +56,17 @@ def reconcile_modernization_blueprint(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         print(f"   Error: Claude invocation failed: {e}")
         return {
-            "blueprint": state["blueprint"],
+            "blueprint": state["blueprint"] if isinstance(state["blueprint"], dict) else {},
             "iteration": iteration,
         }
     
     try:
-        if result.content.strip().startswith('{'):
-            parsed = json.loads(result.content)
-            if 'blueprint' in parsed:
-                blueprint_value = parsed['blueprint']
-                if isinstance(blueprint_value, dict) and 'markdown' in blueprint_value:
-                    reconciled = blueprint_value['markdown']
-                elif isinstance(blueprint_value, dict):
-                    reconciled = json.dumps(blueprint_value)
-                else:
-                    reconciled = str(blueprint_value)
-            else:
-                reconciled = result.content
-        else:
-            reconciled = result.content
-    except json.JSONDecodeError as e:
-        print(f"   Warning: Could not parse reconciler response: {e}")
-        reconciled = result.content
+        parsed = extract_json_from_response(result.content)
+        validate_modernization_sections(parsed)
+        reconciled = parsed
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"   Warning: Reconciler output invalid, keeping previous blueprint: {e}")
+        reconciled = state["blueprint"] if isinstance(state["blueprint"], dict) else {}
     
     return {
         "blueprint": reconciled,

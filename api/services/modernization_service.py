@@ -17,6 +17,59 @@ from api.schemas.modernization_schemas import (
 from api.services.prd_service import get_prd
 
 
+# Expected section order for modernization documents
+EXPECTED_SECTION_ORDER = [
+    "1. EXECUTIVE SUMMARY",
+    "2. CURRENT STATE (AS-IS)",
+    "3. MODERNIZATION STRATEGY (7Rs)",
+    "4. TARGET ARCHITECTURE (TO-BE)",
+    "5. DATA MODERNIZATION",
+    "6. MIGRATION ROADMAP",
+    "7. RISKS & MITIGATION",
+    "8. NEXT STEPS",
+]
+
+
+def order_modernization_sections(sections_dict: dict) -> dict:
+    """Reorder modernization sections dict to match expected section order.
+    
+    Handles both numbered sections (e.g. "1. EXECUTIVE SUMMARY") and unnumbered versions.
+    
+    Args:
+        sections_dict: Modernization sections dict with section titles as keys
+        
+    Returns:
+        Dict with keys in expected section order
+    """
+    if not sections_dict:
+        return {}
+    
+    ordered = {}
+    
+    for expected_section in EXPECTED_SECTION_ORDER:
+        if expected_section in sections_dict:
+            ordered[expected_section] = sections_dict[expected_section]
+            continue
+        
+        section_title = expected_section.split(". ", 1)[1] if ". " in expected_section else expected_section
+        for key, value in sections_dict.items():
+            key_normalized = key.split(". ", 1)[1] if ". " in key else key
+            if key_normalized == section_title or key == section_title:
+                ordered[key] = value
+                break
+    
+    for key, value in sections_dict.items():
+        if key not in ordered:
+            key_title = key.split(". ", 1)[1] if ". " in key else key
+            already_added = any(
+                v == value for v in ordered.values()
+            )
+            if not already_added:
+                ordered[key] = value
+    
+    return ordered
+
+
 def _resolve_prd_names(prd_ids: list[str]) -> list[LinkedPrd]:
     """Resolve PRD IDs to LinkedPrd objects with names.
     
@@ -99,6 +152,8 @@ def get_modernization_doc(doc_id: str) -> ModernizationDocResponse:
         if not doc:
             return None
         
+        ordered_sections = order_modernization_sections(doc.generated_sections or {})
+        
         return ModernizationDocResponse(
             id=doc.id,
             name=doc.name,
@@ -107,7 +162,7 @@ def get_modernization_doc(doc_id: str) -> ModernizationDocResponse:
             modernization_goals=doc.modernization_goals,
             linked_prds=_resolve_prd_names(doc.linked_prds or []),
             source_assets=[SourceAsset(**asset) for asset in (doc.source_assets or [])],
-            generated_sections=doc.generated_sections or {},
+            generated_sections=ordered_sections,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
             submitted_at=doc.submitted_at,
@@ -141,6 +196,8 @@ def update_modernization_doc(doc_id: str, name: Optional[str] = None, descriptio
         session.add(doc)
         session.flush()
         
+        ordered_sections = order_modernization_sections(doc.generated_sections or {})
+        
         return ModernizationDocResponse(
             id=doc.id,
             name=doc.name,
@@ -149,7 +206,7 @@ def update_modernization_doc(doc_id: str, name: Optional[str] = None, descriptio
             modernization_goals=doc.modernization_goals,
             linked_prds=_resolve_prd_names(doc.linked_prds or []),
             source_assets=[SourceAsset(**asset) for asset in (doc.source_assets or [])],
-            generated_sections=doc.generated_sections or {},
+            generated_sections=ordered_sections,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
             submitted_by=doc.submitted_by,
@@ -283,6 +340,8 @@ def submit_for_approval(doc_id: str, submitted_by: str, comment: Optional[str] =
         session.add(approval_event)
         session.flush()
         
+        ordered_sections = order_modernization_sections(doc.generated_sections or {})
+        
         return ModernizationDocResponse(
             id=doc.id,
             name=doc.name,
@@ -291,7 +350,7 @@ def submit_for_approval(doc_id: str, submitted_by: str, comment: Optional[str] =
             modernization_goals=doc.modernization_goals,
             linked_prds=_resolve_prd_names(doc.linked_prds or []),
             source_assets=[SourceAsset(**asset) for asset in (doc.source_assets or [])],
-            generated_sections=doc.generated_sections or {},
+            generated_sections=ordered_sections,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
             submitted_at=doc.submitted_at,
@@ -335,6 +394,8 @@ def review_modernization_doc(doc_id: str, action: str, reviewed_by: str, comment
         session.add(approval_event)
         session.flush()
         
+        ordered_sections = order_modernization_sections(doc.generated_sections or {})
+        
         return ModernizationDocResponse(
             id=doc.id,
             name=doc.name,
@@ -343,7 +404,7 @@ def review_modernization_doc(doc_id: str, action: str, reviewed_by: str, comment
             modernization_goals=doc.modernization_goals,
             linked_prds=_resolve_prd_names(doc.linked_prds or []),
             source_assets=[SourceAsset(**asset) for asset in (doc.source_assets or [])],
-            generated_sections=doc.generated_sections or {},
+            generated_sections=ordered_sections,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
             submitted_at=doc.submitted_at,

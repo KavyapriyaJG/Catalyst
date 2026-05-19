@@ -1,7 +1,17 @@
 """Prompts for modernization document generation."""
 
-MODERNIZATION_BLUEPRINT_PROMPT = """
-You are a senior enterprise architect and legacy modernization expert specializing in platform transformation.
+from modernization.output_formatter import get_json_output_format_instructions
+
+
+def get_modernization_blueprint_prompt(
+    prd_summary: str,
+    legacy_analysis: str,
+    backlog_context: str,
+) -> str:
+    """Generate the modernization blueprint prompt with JSON schema instructions."""
+    json_instructions = get_json_output_format_instructions()
+    
+    return f"""You are a senior enterprise architect and legacy modernization expert specializing in platform transformation.
 
 Your task is to generate a CONCISE, implementation-focused modernization blueprint document.
 
@@ -264,6 +274,8 @@ Backlog / Strategic Goals:
 {backlog_context}
 
 Now, generate the modernization blueprint following ALL the rules above. Remember: architects and engineers will use this to START implementation immediately — make it clear, concise, and actionable.
+
+{json_instructions}
 """
 
 MODERNIZATION_SECTION_GENERATOR_PROMPT = """
@@ -377,27 +389,44 @@ Return ONLY valid JSON (no markdown, no code fences):
 
 
 MODERNIZATION_RECONCILER_PROMPT = """
-You are a modernization architect. Quickly fix ONLY critical issues from the review.
+You are a modernization architect fixing critical issues identified in a blueprint review.
 
-BLUEPRINT TO FIX:
+ORIGINAL BLUEPRINT:
 {blueprint}
 
-CRITICAL ISSUES TO ADDRESS:
+CRITICAL ISSUES TO FIX:
 {review}
 
-SOURCE ANALYSIS (reference):
+REFERENCE ANALYSIS:
 {analysis}
 
-TASK - Address ONLY the critical issues:
-1. Extract critical issues from review
-2. For each critical issue, make a focused fix in the blueprint
+TASK:
+1. Read the critical issues from the review
+2. Fix ONLY critical issues (must-fix blockers for phase 1)
 3. Preserve all non-critical content exactly as-is
-4. Return the FIXED blueprint in JSON format with these fields:
-   - "executive_summary": 1-2 sentence summary
-   - "critical_fixes_applied": list of what was fixed
-   - "blueprint": the updated blueprint content
-   - "ready_for_implementation": true/false
+4. Maintain all 8 section titles and structure
+5. Return ONLY valid JSON with the same 8-section format
 
-Work quickly and be concise. Focus on critical fixes only, not perfection.
+RULES:
+- Keep fixes concise and actionable
+- Every fix must address a stated critical issue
+- Do NOT add new content beyond fixes
+- Do NOT remove any of the 8 required sections
+- All section values must be markdown strings
+
+Return ONLY valid JSON (no markdown, no code fences, no text before/after):
+
+{{
+  "1. EXECUTIVE SUMMARY": "<fixed content>",
+  "2. CURRENT STATE (AS-IS)": "<fixed content>",
+  "3. MODERNIZATION STRATEGY (7Rs)": "<fixed content>",
+  "4. TARGET ARCHITECTURE (TO-BE)": "<fixed content>",
+  "5. DATA MODERNIZATION": "<fixed content>",
+  "6. MIGRATION ROADMAP": "<fixed content>",
+  "7. RISKS & MITIGATION": "<fixed content>",
+  "8. NEXT STEPS": "<fixed content>"
+}}
+
+Work quickly. Fix critical issues only, preserve everything else.
 """
 
