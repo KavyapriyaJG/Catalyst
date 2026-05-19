@@ -1,5 +1,6 @@
 """LangGraph agent for AI-based modernization document generation."""
 
+import asyncio
 import queue as queue_module
 import sys
 from pathlib import Path
@@ -258,38 +259,130 @@ Section Purpose: {description}
 
 def generate_executive_summary(state: ModernizationState) -> ModernizationState:
     """Generate Executive Summary section."""
-    print("Generating section 1 of 6: Executive Summary...")
-    client = get_claude_client()
-    
-    prd_context = load_prd_context(state["linked_prds"])
-    section_desc = SECTION_TEMPLATES["executive_summary"]["description"]
-    supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-    prompt = _create_section_prompt(
-        "executive_summary",
-        state["doc_name"],
-        state["modernization_goals"],
-        prd_context,
-        supporting_docs_context,
-        section_desc,
-    )
+    print("Generating section 1 of 7: Executive Summary...")
+    try:
+        client = get_claude_client()
+        
+        prd_context = load_prd_context(state["linked_prds"])
+        section_desc = SECTION_TEMPLATES["executive_summary"]["description"]
+        supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
+        prompt = _create_section_prompt(
+            "executive_summary",
+            state["doc_name"],
+            state["modernization_goals"],
+            prd_context,
+            supporting_docs_context,
+            section_desc,
+        )
 
-    message = client.invoke([HumanMessage(content=prompt)])
-    state["sections"]["executive_summary"] = message.content
-    state["messages"].append(HumanMessage(content=prompt))
-    state["messages"].append(message)
+        message = client.invoke([HumanMessage(content=prompt)])
+        state["sections"]["executive_summary"] = message.content
+        state["messages"].append(HumanMessage(content=prompt))
+        state["messages"].append(message)
+        print("Section 1 completed")
+    except Exception as e:
+        state["sections"]["executive_summary"] = f"[Error generating section: {str(e)}]"
+    
     return state
 
 
-def generate_current_target_state(state: ModernizationState) -> ModernizationState:
-    """Generate Current State → Target State section."""
-    print("Generating section 2 of 6: Current State → Target State...")
+def generate_current_state_assessment(state: ModernizationState) -> ModernizationState:
+    """Generate Current State Assessment (AS-IS) section."""
+    print("Generating section 2 of 7: Current State Assessment...")
+    try:
+        client = get_claude_client()
+        
+        prd_context = load_prd_context(state["linked_prds"])
+        section_desc = SECTION_TEMPLATES["current_state_assessment"]["description"]
+        supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
+        prompt = _create_section_prompt(
+            "current_state_assessment",
+            state["doc_name"],
+            state["modernization_goals"],
+            prd_context,
+            supporting_docs_context,
+            section_desc,
+        )
+
+        message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
+        state["sections"]["current_state_assessment"] = message.content
+        state["messages"].append(HumanMessage(content=prompt))
+        state["messages"].append(message)
+        print("Section 2 completed")
+    except Exception as e:
+        state["sections"]["current_state_assessment"] = f"[Error generating section: {str(e)}]"
+    
+    return state
+
+
+def generate_modernization_strategy(state: ModernizationState) -> ModernizationState:
+    """Generate Modernization Strategy (7Rs Assessment) section."""
+    print("Generating section 3 of 7: Modernization Strategy...")
+    try:
+        client = get_claude_client()
+        
+        prd_context = load_prd_context(state["linked_prds"])
+        section_desc = SECTION_TEMPLATES["modernization_strategy"]["description"]
+        supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
+        prompt = _create_section_prompt(
+            "modernization_strategy",
+            state["doc_name"],
+            state["modernization_goals"],
+            prd_context,
+            supporting_docs_context,
+            section_desc,
+        )
+
+        message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
+        state["sections"]["modernization_strategy"] = message.content
+        state["messages"].append(HumanMessage(content=prompt))
+        state["messages"].append(message)
+        print("Section 3 completed")
+    except Exception as e:
+        state["sections"]["modernization_strategy"] = f"[Error generating section: {str(e)}]"
+    
+    return state
+
+
+def generate_target_architecture(state: ModernizationState) -> ModernizationState:
+    """Generate Target Architecture (TO-BE) section."""
+    print("Generating section 4 of 7: Target Architecture...")
+    try:
+        client = get_claude_client()
+        
+        prd_context = load_prd_context(state["linked_prds"])
+        section_desc = SECTION_TEMPLATES["target_architecture"]["description"]
+        supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
+        prompt = _create_section_prompt(
+            "target_architecture",
+            state["doc_name"],
+            state["modernization_goals"],
+            prd_context,
+            supporting_docs_context,
+            section_desc,
+        )
+
+        message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
+        state["sections"]["target_architecture"] = message.content
+        state["messages"].append(HumanMessage(content=prompt))
+        state["messages"].append(message)
+        print("Section 4 completed")
+    except Exception as e:
+        state["sections"]["target_architecture"] = f"[Error generating section: {str(e)}]"
+    
+    return state
+
+
+def generate_data_modernization(state: ModernizationState) -> ModernizationState:
+    """Generate Data Modernization Strategy section."""
+    print("Generating section 5 of 7: Data Modernization...")
     client = get_claude_client()
     
     prd_context = load_prd_context(state["linked_prds"])
-    section_desc = SECTION_TEMPLATES["current_target_state"]["description"]
+    section_desc = SECTION_TEMPLATES["data_modernization"]["description"]
     supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
     prompt = _create_section_prompt(
-        "current_target_state",
+        "data_modernization",
         state["doc_name"],
         state["modernization_goals"],
         prd_context,
@@ -298,22 +391,23 @@ def generate_current_target_state(state: ModernizationState) -> ModernizationSta
     )
 
     message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-    state["sections"]["current_target_state"] = message.content
+    state["sections"]["data_modernization"] = message.content
     state["messages"].append(HumanMessage(content=prompt))
     state["messages"].append(message)
+    print("Section 5 completed")
     return state
 
 
-def generate_implementation_approach(state: ModernizationState) -> ModernizationState:
-    """Generate Implementation Approach section."""
-    print("Generating section 3 of 6: Implementation Approach...")
+def generate_migration_roadmap(state: ModernizationState) -> ModernizationState:
+    """Generate Migration Roadmap & Phasing section."""
+    print("Generating section 6 of 7: Migration Roadmap...")
     client = get_claude_client()
     
     prd_context = load_prd_context(state["linked_prds"])
-    section_desc = SECTION_TEMPLATES["implementation_approach"]["description"]
+    section_desc = SECTION_TEMPLATES["migration_roadmap"]["description"]
     supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
     prompt = _create_section_prompt(
-        "implementation_approach",
+        "migration_roadmap",
         state["doc_name"],
         state["modernization_goals"],
         prd_context,
@@ -322,106 +416,69 @@ def generate_implementation_approach(state: ModernizationState) -> Modernization
     )
 
     message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-    state["sections"]["implementation_approach"] = message.content
+    state["sections"]["migration_roadmap"] = message.content
     state["messages"].append(HumanMessage(content=prompt))
     state["messages"].append(message)
+    print("Section 6 completed")
     return state
 
 
-def generate_risks_mitigation(state: ModernizationState) -> ModernizationState:
+def generate_risks_and_mitigation(state: ModernizationState) -> ModernizationState:
     """Generate Risks & Mitigation section."""
-    print("Generating section 4 of 6: Risks & Mitigation...")
-    client = get_claude_client()
+    print("Generating section 7 of 7: Risks & Mitigation...")
+    try:
+        client = get_claude_client()
+        
+        prd_context = load_prd_context(state["linked_prds"])
+        section_desc = SECTION_TEMPLATES["risks_and_mitigation"]["description"]
+        supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
+        prompt = _create_section_prompt(
+            "risks_and_mitigation",
+            state["doc_name"],
+            state["modernization_goals"],
+            prd_context,
+            supporting_docs_context,
+            section_desc,
+        )
+
+        message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
+        state["sections"]["risks_and_mitigation"] = message.content
+        state["messages"].append(HumanMessage(content=prompt))
+        state["messages"].append(message)
+        print("Section 7 completed")
+    except Exception as e:
+        state["sections"]["risks_and_mitigation"] = f"[Error generating section: {str(e)}]"
     
-    prd_context = load_prd_context(state["linked_prds"])
-    section_desc = SECTION_TEMPLATES["risks_mitigation"]["description"]
-    supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-    prompt = _create_section_prompt(
-        "risks_mitigation",
-        state["doc_name"],
-        state["modernization_goals"],
-        prd_context,
-        supporting_docs_context,
-        section_desc,
-    )
-
-    message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-    state["sections"]["risks_mitigation"] = message.content
-    state["messages"].append(HumanMessage(content=prompt))
-    state["messages"].append(message)
-    return state
-
-
-def generate_resource_timeline(state: ModernizationState) -> ModernizationState:
-    """Generate Resource & Timeline section."""
-    print("Generating section 5 of 6: Resource & Timeline...")
-    client = get_claude_client()
-    
-    prd_context = load_prd_context(state["linked_prds"])
-    section_desc = SECTION_TEMPLATES["resource_timeline"]["description"]
-    supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-    prompt = _create_section_prompt(
-        "resource_timeline",
-        state["doc_name"],
-        state["modernization_goals"],
-        prd_context,
-        supporting_docs_context,
-        section_desc,
-    )
-
-    message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-    state["sections"]["resource_timeline"] = message.content
-    state["messages"].append(HumanMessage(content=prompt))
-    state["messages"].append(message)
-    return state
-
-
-def generate_success_metrics(state: ModernizationState) -> ModernizationState:
-    """Generate Success Metrics section."""
-    print("Generating section 6 of 6: Success Metrics...")
-    client = get_claude_client()
-    
-    prd_context = load_prd_context(state["linked_prds"])
-    section_desc = SECTION_TEMPLATES["success_metrics"]["description"]
-    supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-    prompt = _create_section_prompt(
-        "success_metrics",
-        state["doc_name"],
-        state["modernization_goals"],
-        prd_context,
-        supporting_docs_context,
-        section_desc,
-    )
-
-    message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-    state["sections"]["success_metrics"] = message.content
-    state["messages"].append(HumanMessage(content=prompt))
-    state["messages"].append(message)
     return state
 
 
 def build_modernization_agent():
     """Build the modernization document generation agent."""
+    from langgraph.graph import END
+    
     workflow = StateGraph(ModernizationState)
     
     workflow.add_node("executive_summary", generate_executive_summary)
-    workflow.add_node("current_target_state", generate_current_target_state)
-    workflow.add_node("implementation_approach", generate_implementation_approach)
-    workflow.add_node("risks_mitigation", generate_risks_mitigation)
-    workflow.add_node("resource_timeline", generate_resource_timeline)
-    workflow.add_node("success_metrics", generate_success_metrics)
+    workflow.add_node("current_state_assessment", generate_current_state_assessment)
+    workflow.add_node("modernization_strategy", generate_modernization_strategy)
+    workflow.add_node("target_architecture", generate_target_architecture)
+    workflow.add_node("data_modernization", generate_data_modernization)
+    workflow.add_node("migration_roadmap", generate_migration_roadmap)
+    workflow.add_node("risks_and_mitigation", generate_risks_and_mitigation)
     
     workflow.add_edge(START, "executive_summary")
-    workflow.add_edge("executive_summary", "current_target_state")
-    workflow.add_edge("current_target_state", "implementation_approach")
-    workflow.add_edge("implementation_approach", "risks_mitigation")
-    workflow.add_edge("risks_mitigation", "resource_timeline")
-    workflow.add_edge("resource_timeline", "success_metrics")
+    workflow.add_edge("executive_summary", "current_state_assessment")
+    workflow.add_edge("current_state_assessment", "modernization_strategy")
+    workflow.add_edge("modernization_strategy", "target_architecture")
+    workflow.add_edge("target_architecture", "data_modernization")
+    workflow.add_edge("data_modernization", "migration_roadmap")
+    workflow.add_edge("migration_roadmap", "risks_and_mitigation")
+    workflow.add_edge("risks_and_mitigation", END)
     
     return workflow.compile()
 
 
-def generate_modernization_doc(
+async def generate_modernization_doc(
     doc_id: str,
     doc_name: str,
     modernization_goals: Optional[str] = None,
@@ -429,7 +486,7 @@ def generate_modernization_doc(
     source_assets: Optional[list[dict]] = None,
     event_queue: Optional[queue_module.Queue] = None,
 ) -> dict[str, str]:
-    """Generate all modernization document sections.
+    """Generate all modernization document sections (async).
     
     Args:
         doc_id: Document ID
@@ -442,31 +499,31 @@ def generate_modernization_doc(
     Returns:
         Dictionary of section_id -> content
     """
-    # Capture stdout if event_queue is provided
-    original_stdout = sys.stdout
-    if event_queue:
-        sys.stdout = _OutputCapture(event_queue, original_stdout)
-    
-    try:
-        agent = build_modernization_agent()
-        
-        print(f"Generating modernization document: {doc_name}")
-        print("Loading PRD context...")
-        
-        initial_state = ModernizationState(
-            doc_id=doc_id,
-            doc_name=doc_name,
-            modernization_goals=modernization_goals,
-            linked_prds=linked_prds or [],
-            source_assets=source_assets or [],
-            messages=[],
-            sections={},
-        )
-        
-        result = agent.invoke(initial_state)
-        
-        print("Modernization document generation complete")
-        return result["sections"]
-    finally:
+    def _generate_sync():
+        """Blocking generation wrapped for async execution."""
+        # Capture stdout if event_queue is provided
+        original_stdout = sys.stdout
         if event_queue:
-            sys.stdout = original_stdout
+            sys.stdout = _OutputCapture(event_queue, original_stdout)
+        
+        try:
+            agent = build_modernization_agent()
+            
+            initial_state = ModernizationState(
+                doc_id=doc_id,
+                doc_name=doc_name,
+                modernization_goals=modernization_goals,
+                linked_prds=linked_prds or [],
+                source_assets=source_assets or [],
+                messages=[],
+                sections={},
+            )
+            
+            result = agent.invoke(initial_state)
+            return result["sections"]
+        finally:
+            if event_queue:
+                sys.stdout = original_stdout
+    
+    # Run blocking operation in thread pool without blocking event loop
+    return await asyncio.to_thread(_generate_sync)

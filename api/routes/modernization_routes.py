@@ -5,9 +5,7 @@ import base64
 import json
 import queue as queue_module
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -37,7 +35,7 @@ from utils.file_handling import (
     get_extension_error_message,
 )
 
-router = APIRouter(prefix="/api/modernization", tags=["modernization"])
+router = APIRouter(prefix="/modernization", tags=["modernization"])
 settings = get_settings()
 
 ALLOWED_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
@@ -222,37 +220,33 @@ async def generate_from_prds(doc_id: str):
         """Async generator that streams events from the background generation task."""
         event_queue: queue_module.Queue[str] = queue_module.Queue()
         
-        loop = asyncio.get_event_loop()
-        gen_func = partial(
-            generate_modernization_doc,
-            doc_id=doc_id,
-            doc_name=doc.name,
-            modernization_goals=doc.modernization_goals,
-            linked_prds=doc.linked_prds if doc.linked_prds else [],
-            source_assets=doc.source_assets if doc.source_assets else [],
-            event_queue=event_queue,
+        generation_task = asyncio.create_task(
+            generate_modernization_doc(
+                doc_id=doc_id,
+                doc_name=doc.name,
+                modernization_goals=doc.modernization_goals,
+                linked_prds=doc.linked_prds if doc.linked_prds else [],
+                source_assets=doc.source_assets if doc.source_assets else [],
+                event_queue=event_queue,
+            )
         )
         
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            generation_task = loop.run_in_executor(pool, gen_func)
+        yield f"data: Analyzing modernization context...\n\n"
         
-        yield f"data: {json.dumps({'status': 'starting', 'message': 'Analyzing modernization context...'})}\n\n"
-        
+        # Poll queue while task is running
         while not generation_task.done():
             await asyncio.sleep(0.1)
             while not event_queue.empty():
                 try:
                     event_text = event_queue.get_nowait()
-                    if "Generating section" in event_text:
-                        yield f"data: {json.dumps({'status': 'progress', 'message': event_text})}\n\n"
+                    yield f"data: {event_text}\n\n"
                 except queue_module.Empty:
                     break
         
         while not event_queue.empty():
             try:
                 event_text = event_queue.get_nowait()
-                if "Generating section" in event_text:
-                    yield f"data: {json.dumps({'status': 'progress', 'message': event_text})}\n\n"
+                yield f"data: {event_text}\n\n"
             except queue_module.Empty:
                 break
         
@@ -266,13 +260,15 @@ async def generate_from_prds(doc_id: str):
                     db_doc.updated_at = datetime.now(timezone.utc)
                     session.add(db_doc)
                     session.commit()
+                else:
+                    yield f"event: error\ndata: {json.dumps({'error': 'Document not found in database during save'})}\n\n"
+                    return
 
-            yield f"data: {json.dumps({'status': 'complete', 'message': 'Modernization document generated successfully!'})}\n\n"
+            yield f"event: complete\ndata: {json.dumps({'message': 'Modernization document generated successfully!', 'sections': sections})}\n\n"
         
         except Exception as e:
-            print(f"Error in generate_from_prds: {e}")
             traceback.print_exc()
-            yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

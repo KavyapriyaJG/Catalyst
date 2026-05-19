@@ -9,15 +9,13 @@ class ModernizationSection(BaseModel):
     section_id: str = Field(description="Unique section identifier (e.g., executive_summary)")
     title: str = Field(description="Human-readable section title")
     content: str = Field(description="Section content (200-400 words, plain text with markdown support)")
-    word_count: Optional[int] = Field(default=None, description="Word count of the content")
     
     class Config:
         json_schema_extra = {
             "example": {
                 "section_id": "executive_summary",
                 "title": "Executive Summary",
-                "content": "Business drivers and key benefits...",
-                "word_count": 287
+                "content": "Business drivers and key benefits..."
             }
         }
 
@@ -38,8 +36,7 @@ class ModernizationDocumentOutput(BaseModel):
                     {
                         "section_id": "executive_summary",
                         "title": "Executive Summary",
-                        "content": "...",
-                        "word_count": 287
+                        "content": "..."
                     }
                 ],
                 "metadata": {"generated_at": "2026-05-18T10:00:00Z"}
@@ -48,60 +45,88 @@ class ModernizationDocumentOutput(BaseModel):
 
 
 # Predefined section templates with titles, descriptions, and guidelines
+# Focused on technical migration strategy with explicit AWS 7Rs framework
 SECTION_TEMPLATES = {
     "executive_summary": {
         "title": "Executive Summary",
-        "description": "High-level overview of business drivers, key benefits, timeline, and investment scope",
-        "guidelines": """- Start with the strategic drivers and business case
-- Highlight major benefits and expected outcomes
-- Include timeline overview and key milestones
-- Provide investment and resource scope
-- End with compelling value proposition""",
+        "description": "Business drivers for modernization, strategic goals, expected outcomes, and value proposition",
+        "guidelines": """- Define why modernization is critical (technical debt, business constraints, compliance)
+- State strategic modernization goals and success criteria
+- Summarize expected business outcomes and benefits
+- Highlight key technical or operational improvements
+- Outline scope and transformation approach at high level""",
     },
-    "current_target_state": {
-        "title": "Current State → Target State",
-        "description": "Analysis of current technology stack versus desired future state with clear rationale",
-        "guidelines": """- Describe current architecture and technology landscape
-- Identify limitations and pain points of current state
-- Define target architecture and desired state
-- Explain the gap and why modernization is necessary
-- Reference specific technical/business constraints""",
+    "current_state_assessment": {
+        "title": "Current State Assessment (AS-IS)",
+        "description": "Inventory of legacy systems, modules, components, dependencies, pain points, and technical debt",
+        "guidelines": """- Document core legacy systems/modules and their functions
+- Describe current technology stack, databases, and integrations
+- Identify system interdependencies and data flows
+- List pain points, scalability issues, and technical debt
+- Assess maintainability, performance bottlenecks, and complexity hotspots
+- Document any compliance or security gaps""",
     },
-    "implementation_approach": {
-        "title": "Implementation Approach",
-        "description": "Comprehensive strategy covering phases, milestones, dependencies, and go-live approach",
-        "guidelines": """- Define implementation phases and sequencing
-- List major workstreams and their dependencies
-- Outline milestone criteria and delivery gates
-- Explain go-live strategy and rollback plans
-- Address integration points and parallel run considerations""",
+    "modernization_strategy": {
+        "title": "Modernization Strategy (7Rs Assessment)",
+        "description": "Detailed 7Rs evaluation for each system/module with rationale and approach selection",
+        "guidelines": """- For each major system/module, evaluate all 7Rs:
+  * **Rehost**: Lift & shift to cloud as-is
+  * **Replatform**: Lift, tinker & shift (minimal refactoring)
+  * **Refactor/Re-architect**: Modernize code/architecture for cloud
+  * **Repurchase**: Replace with SaaS/COTS solution
+  * **Retire**: Decommission unnecessary systems
+  * **Retain**: Keep on-premises or as-is
+  * **Re-invest**: Enhance for strategic advantage
+- Justify the selected 7R for each component
+- Document trade-offs and constraints
+- Identify dependencies and integration concerns""",
     },
-    "risks_mitigation": {
+    "target_architecture": {
+        "title": "Target Architecture (TO-BE)",
+        "description": "Future state technology architecture, cloud design, microservices, APIs, and deployment model",
+        "guidelines": """- Design target cloud/modern architecture
+- Define service boundaries and microservices approach
+- Specify technology stack choices (languages, frameworks, databases)
+- Document API design and integration patterns
+- Describe deployment model (containers, serverless, hybrid)
+- Address scalability, resilience, and high-availability design
+- Map business capabilities to technical services""",
+    },
+    "data_modernization": {
+        "title": "Data Modernization Strategy",
+        "description": "Data migration approach, schema mapping, transformation rules, and data validation",
+        "guidelines": """- Inventory legacy data structures, copybooks, and databases
+- Define data mapping from legacy to target systems
+- Document transformation and cleansing rules
+- Address data quality and reconciliation approach
+- Specify data migration method (batch, CDC, real-time sync)
+- Define cut-over strategy and data validation checkpoints
+- Document rollback procedures for data issues""",
+    },
+    "migration_roadmap": {
+        "title": "Migration Roadmap & Phasing",
+        "description": "Phase-wise migration plan, execution sequencing, coexistence strategy, and cutover approach",
+        "guidelines": """- Define migration phases and wave sequencing
+- Identify quick wins and pilot candidates
+- Document dependencies between phases
+- Plan parallel run and coexistence periods
+- Specify system cutover sequence and timing
+- Address fallback and rollback procedures
+- Define success criteria for each phase completion""",
+    },
+    "risks_and_mitigation": {
         "title": "Risks & Mitigation",
-        "description": "Identification of major risks, mitigation strategies, contingency plans, and risk ownership",
-        "guidelines": """- Identify top business, technical, and organizational risks
-- Rate risk severity and probability
-- For each risk, provide specific mitigation strategies
-- Define contingency/fallback approaches
-- Assign clear risk ownership and monitoring""",
-    },
-    "resource_timeline": {
-        "title": "Resource & Timeline",
-        "description": "Detailed resource requirements, timeline, budget, and key milestones",
-        "guidelines": """- Define team structure and key roles required
-- Specify skills and expertise needed
-- Provide overall timeline with key milestones
-- Estimate effort (FTE months/hours)
-- Include budget and cost considerations""",
-    },
-    "success_metrics": {
-        "title": "Success Metrics",
-        "description": "Measurable KPIs, performance targets, and ROI goals to track modernization success",
-        "guidelines": """- Define success criteria aligned to modernization goals
-- Specify quantifiable KPIs (performance, cost, availability)
-- Include baseline metrics and target improvements
-- Address user experience and adoption metrics
-- Define measurement and validation approach""",
+        "description": "Technical, operational, and business risks with mitigation strategies and contingency plans",
+        "guidelines": """- Identify major technical risks (compatibility, performance, data integrity)
+- Document operational risks (downtime, support gaps, skills)
+- List business risks (cost overruns, schedule delays, adoption)
+- For each risk, define:
+  * Risk probability and impact
+  * Mitigation strategy and preventive actions
+  * Contingency plan if risk materializes
+  * Owner and monitoring approach
+- Prioritize risks by severity
+- Define escalation procedures for critical issues""",
     },
 }
 
@@ -117,7 +142,6 @@ def format_section_for_display(section_id: str, content: str) -> dict:
         "section_id": section_id,
         "title": get_section_title(section_id),
         "content": content,
-        "word_count": len(content.split()),
     }
 
 
@@ -142,7 +166,6 @@ def format_document_for_storage(
         formatted_sections[section_id] = {
             "title": get_section_title(section_id),
             "content": content,
-            "word_count": len(content.split()),
         }
     
     return {
@@ -151,7 +174,6 @@ def format_document_for_storage(
         "sections": formatted_sections,
         "metadata": {
             "total_sections": len(sections),
-            "total_words": sum(len(content.split()) for content in sections.values()),
         }
     }
 
