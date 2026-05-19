@@ -14,13 +14,13 @@ from fastapi.responses import StreamingResponse
 
 from config import get_settings
 from api.schemas.modernization_schemas import (
-    CreateModernizationRequest,
     UpdateModernizationRequest,
     SubmitForApprovalRequest,
     ApprovalActionRequest,
     ModernizationDocResponse,
     ModernizationDocListItem,
     FileUploadResponse,
+    ModernizationGenerateRequest,
 )
 from api.services import modernization_service
 from modernization.utils.generator import generate_docx_export
@@ -42,15 +42,155 @@ ALLOWED_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
 VALID_STATUSES = {'draft', 'pending_approval', 'approved', 'rejected', 'synced_to_jira'}
 
 
-@router.post("/", response_model=ModernizationDocResponse, status_code=status.HTTP_201_CREATED)
-def create_modernization_doc(request: CreateModernizationRequest) -> ModernizationDocResponse:
-    """Create a new modernization document."""
-    return modernization_service.create_modernization_doc(
-        name=request.name,
-        modernization_goals=request.modernization_goals,
-        description=request.description,
-        linked_prds=request.linked_prds,
-    )
+def parse_blueprint_to_sections(blueprint: str) -> dict[str, str]:
+    """
+    Parse a markdown blueprint string into separate sections by ## headings.
+    Handles nested ### subsections within each main section.
+    
+    Args:
+        blueprint: Markdown string with ## headings for sections (or dict to extract from)
+        
+    Returns:
+        Dictionary with section titles as keys and content as values
+    """
+    if not blueprint:
+        return {}
+    
+    # If blueprint is a dict, try to extract markdown content
+    if isinstance(blueprint, dict):
+        # Try to find a 'blueprint' field with the actual markdown
+        if 'blueprint' in blueprint and isinstance(blueprint['blueprint'], str):
+            blueprint = blueprint['blueprint']
+        else:
+            # If it's a dict but no markdown found, return empty (can't parse dict as sections)
+            return {}
+    
+    # Ensure blueprint is a string
+    if not isinstance(blueprint, str):
+        return {}
+    
+    sections = {}
+    current_section = None
+    current_content = []
+    
+    lines = blueprint.split('\n')
+    
+    for line in lines:
+        # Check if this line is a ## heading (main section header, not ### subsection)
+        if line.startswith('## ') and not line.startswith('### '):
+            # Save previous section if exists
+            if current_section is not None:
+                content = '\n'.join(current_content).strip()
+                if content:  # Only save sections with content
+                    sections[current_section] = content
+            
+            # Start new section - extract title after ##
+            current_section = line[3:].strip()  # Remove '## ' prefix
+            current_content = []
+        elif current_section is not None:
+            # Add line to current section (including ### subsections)
+            current_content.append(line)
+    
+    # Don't forget the last section
+    if current_section is not None:
+        content = '\n'.join(current_content).strip()
+        if content:
+            sections[current_section] = content
+    
+    return sections
+
+
+@router.post("/generate")
+async def generate_modernization_doc_sse(payload: ModernizationGenerateRequest):
+    """Generate modernization document from PRDs and supporting docs (SSE streaming).
+    
+    Creates the document internally and streams generation progress via SSE.
+    Returns the doc ID in the complete event.
+    """
+    try:
+        doc = modernization_service.create_modernization_doc(
+            name=payload.name,
+            modernization_goals=payload.modernization_goals,
+            description=payload.modernization_goals,
+            linked_prds=payload.linked_prds,
+        )
+        doc_id = doc.id
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to create document: {str(e)}")
+
+    async def event_generator():
+        """Async generator that streams events from the background generation task."""
+        event_queue: queue_module.Queue[str] = queue_module.Queue()
+        
+        prd_ids = payload.linked_prds
+        assets_dicts = []
+        
+        analysis_context = {
+            "source": "linked_prds_and_assets",
+            "linked_prds": prd_ids,
+            "asset_count": len(payload.supporting_documents),
+            "modernization_goals": payload.modernization_goals or "Not specified",
+        }
+        
+        if payload.supporting_documents:
+            analysis_context["asset_summary"] = f"Supporting documents: {', '.join(payload.supporting_documents)}"
+        
+        generation_task = asyncio.create_task(
+            generate_modernization_doc(
+                doc_id=doc_id,
+                doc_name=payload.name,
+                modernization_goals=payload.modernization_goals,
+                linked_prds=prd_ids,
+                source_assets=assets_dicts,
+                analysis=analysis_context,
+                event_queue=event_queue,
+            )
+        )
+        
+        yield f"data: [Step 1 of 3] Analyzing modernization context...\n\n"
+        
+        while not generation_task.done():
+            await asyncio.sleep(0.1)
+            while not event_queue.empty():
+                try:
+                    event_text = event_queue.get_nowait()
+                    yield f"data: {event_text}\n\n"
+                except queue_module.Empty:
+                    break
+        
+        while not event_queue.empty():
+            try:
+                event_text = event_queue.get_nowait()
+                yield f"data: {event_text}\n\n"
+            except queue_module.Empty:
+                break
+        
+        try:
+            generation_result = await generation_task
+            if isinstance(generation_result, dict):
+                blueprint_str = generation_result.get("blueprint", "")
+            elif isinstance(generation_result, str):
+                blueprint_str = generation_result
+            else:
+                blueprint_str = ""
+            
+            parsed_sections = parse_blueprint_to_sections(blueprint_str) if blueprint_str else {}
+            
+            with get_session() as session:
+                db_doc = session.query(ModernizationDocRecord).filter(ModernizationDocRecord.id == doc_id).first()
+                if db_doc:
+                    db_doc.generated_sections = parsed_sections
+                    db_doc.updated_at = datetime.now(timezone.utc)
+                    session.add(db_doc)
+                    session.commit()
+
+            yield f"event: complete\ndata: {json.dumps({'id': doc_id, 'name': payload.name, 'modernization_goals': payload.modernization_goals})}\n\n"
+        
+        except Exception as e:
+            traceback.print_exc()
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.get("/", response_model=list[ModernizationDocListItem])
@@ -204,73 +344,6 @@ def review_modernization_doc(
         return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-
-
-@router.post("/{doc_id}/generate-from-prds")
-async def generate_from_prds(doc_id: str):
-    """Generate modernization document sections from linked PRDs and supporting docs."""
-    doc = modernization_service.get_modernization_doc(doc_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Modernization document not found")
-
-    if doc.status != "draft":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Can only generate for draft documents")
-
-    async def event_generator():
-        """Async generator that streams events from the background generation task."""
-        event_queue: queue_module.Queue[str] = queue_module.Queue()
-        
-        generation_task = asyncio.create_task(
-            generate_modernization_doc(
-                doc_id=doc_id,
-                doc_name=doc.name,
-                modernization_goals=doc.modernization_goals,
-                linked_prds=doc.linked_prds if doc.linked_prds else [],
-                source_assets=doc.source_assets if doc.source_assets else [],
-                event_queue=event_queue,
-            )
-        )
-        
-        yield f"data: Analyzing modernization context...\n\n"
-        
-        # Poll queue while task is running
-        while not generation_task.done():
-            await asyncio.sleep(0.1)
-            while not event_queue.empty():
-                try:
-                    event_text = event_queue.get_nowait()
-                    yield f"data: {event_text}\n\n"
-                except queue_module.Empty:
-                    break
-        
-        while not event_queue.empty():
-            try:
-                event_text = event_queue.get_nowait()
-                yield f"data: {event_text}\n\n"
-            except queue_module.Empty:
-                break
-        
-        try:
-            sections = await generation_task
-            
-            with get_session() as session:
-                db_doc = session.query(ModernizationDocRecord).filter(ModernizationDocRecord.id == doc_id).first()
-                if db_doc:
-                    db_doc.generated_sections = sections
-                    db_doc.updated_at = datetime.now(timezone.utc)
-                    session.add(db_doc)
-                    session.commit()
-                else:
-                    yield f"event: error\ndata: {json.dumps({'error': 'Document not found in database during save'})}\n\n"
-                    return
-
-            yield f"event: complete\ndata: {json.dumps({'message': 'Modernization document generated successfully!', 'sections': sections})}\n\n"
-        
-        except Exception as e:
-            traceback.print_exc()
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.get("/{doc_id}/export")

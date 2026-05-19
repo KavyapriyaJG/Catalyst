@@ -1,26 +1,30 @@
-"""LangGraph agent for AI-based modernization document generation."""
+"""LangGraph agent for modernization document generation with Reviewer & Reconciler."""
 
 import asyncio
+import json
 import queue as queue_module
 import sys
-from pathlib import Path
-from typing import Optional
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import BaseMessage, HumanMessage
-from langgraph.graph import START, StateGraph
+import traceback
+from typing import Any, Literal, Optional
+
+from langchain_core.messages import HumanMessage
+from langgraph.graph import START, END, StateGraph
 from typing_extensions import TypedDict
 
-from api.services.prd_service import get_prd
 from config import get_settings
-from utils.document_utils import extract_document_content, build_documents, retrieve_context
-from modernization.output_formatter import (
-    get_section_title,
-    SECTION_TEMPLATES,
-)
+from modernization.prompt import MODERNIZATION_BLUEPRINT_PROMPT
+from modernization.agents.reviewer import review_modernization_blueprint
+from modernization.agents.reconciler import reconcile_modernization_blueprint
+from backlog_generation.db import get_session
+from prd_generation.prd_repository import get_prd
 
 
-def get_claude_client() -> ChatAnthropic:
+_EMPTY_BLUEPRINT = "# Modernization Blueprint\n\nBlueprint generation failed"
+
+
+def get_claude_client():
     """Initialize ChatAnthropic with Azure Anthropic credentials."""
+    from langchain_anthropic import ChatAnthropic
     s = get_settings()
     return ChatAnthropic(
         model=s.AZURE_ANTHROPIC_DEPLOYMENT_NAME,
@@ -50,430 +54,118 @@ class _OutputCapture:
 
 
 class ModernizationState(TypedDict):
-    """State for modernization document generation."""
+    """State for modernization blueprint generation, review, and reconciliation."""
     doc_id: str
     doc_name: str
     modernization_goals: Optional[str]
     linked_prds: list[str]
     source_assets: list[dict]
-    messages: list[BaseMessage]
-    sections: dict[str, str]  # Generated sections
+    messages: list
+    analysis: dict[str, Any]  # Source analysis (legacy code, pain points, etc.)
+    blueprint: dict[str, Any] | str  # Generated/reconciled blueprint
+    review: Optional[dict[str, Any]]  # Review findings
+    score: int  # Current review score (0-100)
+    best_score: int  # Best score achieved so far
+    best_blueprint: Optional[dict[str, Any] | str]  # Best blueprint achieved
+    iteration: int  # Reconciliation iteration count
 
 
-def load_prd_context(prd_ids: list[str]) -> str:
-    """Load context from linked PRDs.
+def generate_modernization_blueprint(state: ModernizationState) -> dict[str, Any]:
+    """Generate complete modernization blueprint in a single unified call."""
+    print("\n[Step 1/3] Generating Modernization Blueprint...")
     
-    Fetches each PRD and extracts content sections as plain text.
-    Returns concatenated PRD summaries (first 1000 chars each).
-    """
-    if not prd_ids:
-        return ""
+    prd_data = []
+    try:
+        with get_session() as session:
+            for prd_id in state.get('linked_prds', []):
+                prd_record = get_prd(session, prd_id)
+                if prd_record:
+                    prd_data.append({
+                        "name": prd_record.prd_name,
+                        "content": prd_record.prd_content or {}
+                    })
+    except Exception as e:
+        print(f"   Warning: Could not fetch PRD details: {e}")
     
-    context_parts = []
-    for prd_id in prd_ids:
-        try:
-            prd = get_prd(prd_id)
-            if not prd:
-                continue
-            
-            content_dict = prd.content or {}
-            if not content_dict:
-                continue
-                
-            section_texts = []
-            for section_key, section_value in content_dict.items():
-                if isinstance(section_value, dict):
-                    text = section_value.get("content") or section_value.get("text") or str(section_value)
-                elif isinstance(section_value, str):
-                    text = section_value
-                else:
-                    text = str(section_value)
-                
-                if text:
-                    section_texts.append(text)
-            
-            combined_content = " ".join(section_texts)
-            if combined_content:
-                context_parts.append(f"PRD: {prd.prd_name}\n{combined_content[:1000]}")
-        except Exception:
-            continue
-    
-    return "\n\n".join(context_parts) if context_parts else ""
-
-
-def load_supporting_docs_context(source_assets: list[dict], query: str = "") -> str:
-    """Load and retrieve context from supporting documents using semantic search.
-    
-    Follows the same pattern as epic_agent:
-    1. Convert raw documents to LangChain Document objects with chunking
-    2. Perform semantic similarity search against query
-    3. Return most relevant chunks
-    
-    Args:
-        source_assets: List of {filename, path, uploaded_at, size} dicts
-        query: Search query for semantic similarity (default: empty for all context)
-    
-    Returns:
-        Formatted context string from most relevant document chunks
-    """
-    if not source_assets:
-        return ""
-    
-    # Extract content from uploaded files
-    supporting_documents = []
-    for asset in source_assets:
-        try:
-            filepath = asset.get("path")
-            filename = asset.get("filename")
-            
-            if not filepath:
-                continue
-            
-            file_path = Path(filepath)
-            text = extract_document_content(file_path)
-            
-            if text.strip():
-                supporting_documents.append({
-                    "filename": filename,
-                    "content": text
-                })
-        except (ValueError, Exception):
-            # Silently skip files that can't be extracted
-            continue
-    
-    if not supporting_documents:
-        return ""
-    
-    # Convert to LangChain documents with chunking
-    documents = build_documents(supporting_documents)
-    if not documents:
-        return ""
-    
-    # Use semantic search if query provided, otherwise return all chunks
-    if query:
-        return retrieve_context(query, documents, top_k=6)
+    prd_context = ""
+    prd_names = []
+    if not prd_data:
+        print("   Warning: No linked PRDs found")
+        prd_context = "No PRD details available"
     else:
-        # Return concatenated content of all chunks
-        return "\n\n".join([doc.page_content for doc in documents])
-
-
-def _create_section_prompt(
-    section_id: str,
-    doc_name: str,
-    modernization_goals: str | None,
-    prd_context: str,
-    supporting_docs_context: str = "",
-    section_description: str = "",
-) -> str:
-    """Create a professional, structured prompt for section generation.
+        for prd in prd_data:
+            prd_names.append(prd['name'])
+            prd_context += f"\n{'='*60}\nPRD: {prd['name']}\n{'='*60}\n"
+            
+            content = prd['content']
+            if isinstance(content, dict):
+                for section, value in content.items():
+                    if value:
+                        prd_context += f"\n{section}:\n{str(value)}\n"
+            else:
+                prd_context += str(content)
     
-    Each section has specific requirements tailored to modernization documentation.
-    Supporting documents are semantically searched against the section description.
-    
-    If modernization_goals is not provided, the AI will analyze PRDs and documents
-    to determine the current tech stack and appropriate modernization strategy.
-    """
-    template = SECTION_TEMPLATES.get(section_id, {})
-    title = template.get("title", section_id.replace("_", " ").title())
-    description = template.get("description", "")
-    guidelines = template.get("guidelines", "")
-    
-    # Build modernization context - analyze documents if goals not provided
-    if modernization_goals and modernization_goals.strip():
-        modernization_context = f"Modernization Goals: {modernization_goals}"
-    else:
-        modernization_context = """Modernization Goals: Not explicitly provided. Analyze the PRD and supporting documentation to:
-1. Identify the current technology stack and architecture
-2. Determine pain points and modernization opportunities
-3. Recommend a target technology direction based on industry best practices
-4. Use this analysis to inform your recommendations in this section"""
-    
-    prompt_sections = []
-    
-    prompt_sections.append(
-        f"""You are an enterprise modernization architect and technical strategist with expertise in system transformation, cloud migration, and technology upgrades.
-
-Your task is to author a professional section for a comprehensive modernization strategy document.
-
-**DOCUMENT CONTEXT:**
-Document Title: {doc_name}
-{modernization_context}
-
-**SECTION TO GENERATE:**
-Section Title: {title}
-Section Purpose: {description}
-""")
-    
-    if guidelines:
-        prompt_sections.append(f"""**SECTION GUIDELINES:**
-{guidelines}""")
-    
-    if prd_context:
-        prompt_sections.append(f"""**CURRENT SYSTEM CONTEXT (from PRD):**
-{prd_context}""")
-    
-    if supporting_docs_context:
-        prompt_sections.append(f"""**SUPPORTING DOCUMENTATION:**
-{supporting_docs_context}""")
-    
-    prompt_sections.append(
-        """**QUALITY REQUIREMENTS:**
-1. Content Quality
-   - Write for executive stakeholders and technical leads
-   - Use clear, professional business language
-   - Ground all claims in the provided system context
-   - Include specific, actionable recommendations where applicable
-   - Be comprehensive but concise
-
-2. Structure & Format
-   - Use markdown formatting for clarity (headings, bold, italics, bullet points)
-   - Organize content logically with clear sections/subsections
-   - Use bullet points for lists of items
-   - Use tables for comparisons or structured data when appropriate
-   - Ensure readability and visual hierarchy
-
-3. Content Depth
-   - Provide sufficient detail to support decision-making
-   - Reference specific aspects from the system context
-   - Include rationale and justification for recommendations
-   - Highlight critical considerations and dependencies
-   - Avoid generic statements — be specific and contextual
-
-4. Style Guidelines
-   - Use "The system shall..." or "We recommend..." for requirements/recommendations
-   - Maintain consistent terminology throughout
-   - Use positive, forward-looking language
-   - Be factual and evidence-based
-   - Acknowledge assumptions and constraints
-
-**OUTPUT INSTRUCTIONS:**
-1. Generate ONLY the section body content (no title, no heading level)
-2. Do NOT include introductory phrases like "In this section..." or "Here is..."
-3. Start directly with the substantive content
-4. Ensure the content is self-contained and can stand alone
-5. Use markdown formatting for emphasis and structure
-6. Review for clarity, completeness, and professional tone before finalizing""")
-    
-    return "\n\n".join(prompt_sections)
-
-
-def generate_executive_summary(state: ModernizationState) -> ModernizationState:
-    """Generate Executive Summary section."""
-    print("Generating section 1 of 7: Executive Summary...")
-    try:
-        client = get_claude_client()
-        
-        prd_context = load_prd_context(state["linked_prds"])
-        section_desc = SECTION_TEMPLATES["executive_summary"]["description"]
-        supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-        prompt = _create_section_prompt(
-            "executive_summary",
-            state["doc_name"],
-            state["modernization_goals"],
-            prd_context,
-            supporting_docs_context,
-            section_desc,
-        )
-
-        message = client.invoke([HumanMessage(content=prompt)])
-        state["sections"]["executive_summary"] = message.content
-        state["messages"].append(HumanMessage(content=prompt))
-        state["messages"].append(message)
-        print("Section 1 completed")
-    except Exception as e:
-        state["sections"]["executive_summary"] = f"[Error generating section: {str(e)}]"
-    
-    return state
-
-
-def generate_current_state_assessment(state: ModernizationState) -> ModernizationState:
-    """Generate Current State Assessment (AS-IS) section."""
-    print("Generating section 2 of 7: Current State Assessment...")
-    try:
-        client = get_claude_client()
-        
-        prd_context = load_prd_context(state["linked_prds"])
-        section_desc = SECTION_TEMPLATES["current_state_assessment"]["description"]
-        supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-        prompt = _create_section_prompt(
-            "current_state_assessment",
-            state["doc_name"],
-            state["modernization_goals"],
-            prd_context,
-            supporting_docs_context,
-            section_desc,
-        )
-
-        message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-        state["sections"]["current_state_assessment"] = message.content
-        state["messages"].append(HumanMessage(content=prompt))
-        state["messages"].append(message)
-        print("Section 2 completed")
-    except Exception as e:
-        state["sections"]["current_state_assessment"] = f"[Error generating section: {str(e)}]"
-    
-    return state
-
-
-def generate_modernization_strategy(state: ModernizationState) -> ModernizationState:
-    """Generate Modernization Strategy (7Rs Assessment) section."""
-    print("Generating section 3 of 7: Modernization Strategy...")
-    try:
-        client = get_claude_client()
-        
-        prd_context = load_prd_context(state["linked_prds"])
-        section_desc = SECTION_TEMPLATES["modernization_strategy"]["description"]
-        supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-        prompt = _create_section_prompt(
-            "modernization_strategy",
-            state["doc_name"],
-            state["modernization_goals"],
-            prd_context,
-            supporting_docs_context,
-            section_desc,
-        )
-
-        message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-        state["sections"]["modernization_strategy"] = message.content
-        state["messages"].append(HumanMessage(content=prompt))
-        state["messages"].append(message)
-        print("Section 3 completed")
-    except Exception as e:
-        state["sections"]["modernization_strategy"] = f"[Error generating section: {str(e)}]"
-    
-    return state
-
-
-def generate_target_architecture(state: ModernizationState) -> ModernizationState:
-    """Generate Target Architecture (TO-BE) section."""
-    print("Generating section 4 of 7: Target Architecture...")
-    try:
-        client = get_claude_client()
-        
-        prd_context = load_prd_context(state["linked_prds"])
-        section_desc = SECTION_TEMPLATES["target_architecture"]["description"]
-        supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-        prompt = _create_section_prompt(
-            "target_architecture",
-            state["doc_name"],
-            state["modernization_goals"],
-            prd_context,
-            supporting_docs_context,
-            section_desc,
-        )
-
-        message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-        state["sections"]["target_architecture"] = message.content
-        state["messages"].append(HumanMessage(content=prompt))
-        state["messages"].append(message)
-        print("Section 4 completed")
-    except Exception as e:
-        state["sections"]["target_architecture"] = f"[Error generating section: {str(e)}]"
-    
-    return state
-
-
-def generate_data_modernization(state: ModernizationState) -> ModernizationState:
-    """Generate Data Modernization Strategy section."""
-    print("Generating section 5 of 7: Data Modernization...")
     client = get_claude_client()
-    
-    prd_context = load_prd_context(state["linked_prds"])
-    section_desc = SECTION_TEMPLATES["data_modernization"]["description"]
-    supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-    prompt = _create_section_prompt(
-        "data_modernization",
-        state["doc_name"],
-        state["modernization_goals"],
-        prd_context,
-        supporting_docs_context,
-        section_desc,
+    prompt_text = MODERNIZATION_BLUEPRINT_PROMPT.format(
+        prd_summary=prd_context,
+        legacy_analysis=f"PRDs: {', '.join(prd_names)}" if prd_names else "No PRDs provided",
+        backlog_context=f"Goals: {state.get('modernization_goals', 'Not specified')}",
     )
-
-    message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-    state["sections"]["data_modernization"] = message.content
-    state["messages"].append(HumanMessage(content=prompt))
-    state["messages"].append(message)
-    print("Section 5 completed")
-    return state
-
-
-def generate_migration_roadmap(state: ModernizationState) -> ModernizationState:
-    """Generate Migration Roadmap & Phasing section."""
-    print("Generating section 6 of 7: Migration Roadmap...")
-    client = get_claude_client()
     
-    prd_context = load_prd_context(state["linked_prds"])
-    section_desc = SECTION_TEMPLATES["migration_roadmap"]["description"]
-    supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-    prompt = _create_section_prompt(
-        "migration_roadmap",
-        state["doc_name"],
-        state["modernization_goals"],
-        prd_context,
-        supporting_docs_context,
-        section_desc,
-    )
-
-    message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-    state["sections"]["migration_roadmap"] = message.content
-    state["messages"].append(HumanMessage(content=prompt))
-    state["messages"].append(message)
-    print("Section 6 completed")
-    return state
-
-
-def generate_risks_and_mitigation(state: ModernizationState) -> ModernizationState:
-    """Generate Risks & Mitigation section."""
-    print("Generating section 7 of 7: Risks & Mitigation...")
     try:
-        client = get_claude_client()
-        
-        prd_context = load_prd_context(state["linked_prds"])
-        section_desc = SECTION_TEMPLATES["risks_and_mitigation"]["description"]
-        supporting_docs_context = load_supporting_docs_context(state["source_assets"], query=section_desc)
-        prompt = _create_section_prompt(
-            "risks_and_mitigation",
-            state["doc_name"],
-            state["modernization_goals"],
-            prd_context,
-            supporting_docs_context,
-            section_desc,
-        )
-
-        message = client.invoke(state["messages"] + [HumanMessage(content=prompt)])
-        state["sections"]["risks_and_mitigation"] = message.content
-        state["messages"].append(HumanMessage(content=prompt))
-        state["messages"].append(message)
-        print("Section 7 completed")
+        message = client.invoke([HumanMessage(content=prompt_text)])
     except Exception as e:
-        state["sections"]["risks_and_mitigation"] = f"[Error generating section: {str(e)}]"
+        print(f"   Error: Claude invocation failed: {e}")
+        state["blueprint"] = _EMPTY_BLUEPRINT
+        return state
+    
+    try:
+        parsed = json.loads(message.content)
+        if isinstance(parsed, dict) and 'blueprint' in parsed:
+            blueprint_value = parsed['blueprint']
+            if isinstance(blueprint_value, dict) and 'markdown' in blueprint_value:
+                blueprint = blueprint_value['markdown']
+            elif isinstance(blueprint_value, dict):
+                blueprint = json.dumps(blueprint_value)
+            else:
+                blueprint = str(blueprint_value)
+        else:
+            blueprint = message.content
+    except json.JSONDecodeError:
+        blueprint = message.content
+    
+    state["blueprint"] = blueprint
     
     return state
+
+
+
+def should_continue_reviewing(state: ModernizationState) -> Literal["reconcile", "END"]:
+    """Decide whether to continue reconciling or finish."""
+    s = get_settings()
+    if state["score"] >= s.MODERNIZATION_SCORE_THRESHOLD:
+        return END
+    if state["iteration"] >= s.MODERNIZATION_MAX_ITERATIONS:
+        return END
+    return "reconcile"
 
 
 def build_modernization_agent():
-    """Build the modernization document generation agent."""
-    from langgraph.graph import END
-    
+    """Build the modernization document generation agent with reviewer and reconciler."""
     workflow = StateGraph(ModernizationState)
     
-    workflow.add_node("executive_summary", generate_executive_summary)
-    workflow.add_node("current_state_assessment", generate_current_state_assessment)
-    workflow.add_node("modernization_strategy", generate_modernization_strategy)
-    workflow.add_node("target_architecture", generate_target_architecture)
-    workflow.add_node("data_modernization", generate_data_modernization)
-    workflow.add_node("migration_roadmap", generate_migration_roadmap)
-    workflow.add_node("risks_and_mitigation", generate_risks_and_mitigation)
+    workflow.add_node("generate", generate_modernization_blueprint)
+    workflow.add_node("review", review_modernization_blueprint)
+    workflow.add_node("reconcile", reconcile_modernization_blueprint)
     
-    workflow.add_edge(START, "executive_summary")
-    workflow.add_edge("executive_summary", "current_state_assessment")
-    workflow.add_edge("current_state_assessment", "modernization_strategy")
-    workflow.add_edge("modernization_strategy", "target_architecture")
-    workflow.add_edge("target_architecture", "data_modernization")
-    workflow.add_edge("data_modernization", "migration_roadmap")
-    workflow.add_edge("migration_roadmap", "risks_and_mitigation")
-    workflow.add_edge("risks_and_mitigation", END)
+    workflow.set_entry_point("generate")
+    workflow.add_edge("generate", "review")
+    workflow.add_conditional_edges(
+        "review",
+        should_continue_reviewing,
+        {"reconcile": "reconcile", END: END}
+    )
+    workflow.add_edge("reconcile", "review")
     
     return workflow.compile()
 
@@ -484,46 +176,67 @@ async def generate_modernization_doc(
     modernization_goals: Optional[str] = None,
     linked_prds: Optional[list[str]] = None,
     source_assets: Optional[list[dict]] = None,
+    analysis: Optional[dict[str, Any]] = None,
     event_queue: Optional[queue_module.Queue] = None,
-) -> dict[str, str]:
-    """Generate all modernization document sections (async).
+) -> dict[str, Any]:
+    """
+    Generate modernization blueprint asynchronously with review and reconciliation.
     
     Args:
         doc_id: Document ID
         doc_name: Document name
-        modernization_goals: Optional modernization goals - AI will analyze documents if not provided
+        modernization_goals: Optional modernization goals
         linked_prds: List of linked PRD IDs
-        source_assets: List of uploaded supporting documents with metadata
-        event_queue: Optional queue for SSE streaming of progress events
+        source_assets: List of uploaded supporting documents
+        analysis: Source analysis (legacy code insights, pain points)
+        event_queue: Optional queue for SSE streaming
     
     Returns:
-        Dictionary of section_id -> content
+        Dictionary containing:
+        - blueprint: Final modernization blueprint
+        - score: Final review score
+        - best_score: Best score achieved across iterations
+        - review: Final review findings
     """
     def _generate_sync():
         """Blocking generation wrapped for async execution."""
-        # Capture stdout if event_queue is provided
-        original_stdout = sys.stdout
         if event_queue:
+            original_stdout = sys.stdout
             sys.stdout = _OutputCapture(event_queue, original_stdout)
         
         try:
-            agent = build_modernization_agent()
-            
-            initial_state = ModernizationState(
-                doc_id=doc_id,
-                doc_name=doc_name,
-                modernization_goals=modernization_goals,
-                linked_prds=linked_prds or [],
-                source_assets=source_assets or [],
-                messages=[],
-                sections={},
+            result = build_modernization_agent().invoke(
+                ModernizationState(
+                    doc_id=doc_id,
+                    doc_name=doc_name,
+                    modernization_goals=modernization_goals,
+                    linked_prds=linked_prds or [],
+                    source_assets=source_assets or [],
+                    messages=[],
+                    analysis=analysis or {},
+                    blueprint="",
+                    review=None,
+                    score=0,
+                    best_score=0,
+                    best_blueprint=None,
+                    iteration=0,
+                )
             )
             
-            result = agent.invoke(initial_state)
-            return result["sections"]
+            if result["score"] >= 80:
+                blueprint = result["blueprint"]
+            elif result.get("best_blueprint") is not None and result.get("best_blueprint") != "" and result.get("best_score", 0) > 0:
+                blueprint = result["best_blueprint"]
+            else:
+                blueprint = result["blueprint"]
+            
+            return {
+                "blueprint": blueprint,
+                "score": result.get("score", 0),
+                "best_score": result.get("best_score", 0),
+            }
         finally:
             if event_queue:
                 sys.stdout = original_stdout
     
-    # Run blocking operation in thread pool without blocking event loop
     return await asyncio.to_thread(_generate_sync)

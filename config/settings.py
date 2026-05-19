@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     AZURE_ANTHROPIC_API_KEY: str | None = None
 
     # ── LLM call behaviour ───────────────────────────────────────
-    LLM_TIMEOUT: int = 600
+    LLM_TIMEOUT: int = 900
     LLM_MAX_RETRIES: int = 2
 
     # ── Embeddings ───────────────────────────────────────────────
@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     # ── PRD review loop ──────────────────────────────────────────
     PRD_MAX_ITERATIONS: int = 4
     PRD_SCORE_THRESHOLD: float = 80.0
+
+    # ── Modernization review loop ────────────────────────────────
+    MODERNIZATION_MAX_ITERATIONS: int = 1
+    MODERNIZATION_SCORE_THRESHOLD: float = 65.0
 
     # ── File upload ──────────────────────────────────────────────
     MAX_UPLOAD_SIZE_MB: int = 50

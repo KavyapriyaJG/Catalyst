@@ -96,3 +96,11 @@ class ModernizationGenerationRequest(BaseModel):
     name: str
     linked_prd_ids: list[str]
     custom_goals: Optional[str] = None
+
+
+class ModernizationGenerateRequest(BaseModel):
+    """Request to generate modernization doc from PRDs and supporting docs (single endpoint)."""
+    name: str = Field(..., min_length=1, description="Name of modernization document")
+    modernization_goals: Optional[str] = Field(None, description="Modernization goals/strategy")
+    linked_prds: list[str] = Field(default_factory=list, description="List of linked PRD IDs")
+    supporting_documents: list[str] = Field(default_factory=list, description="List of uploaded file names")

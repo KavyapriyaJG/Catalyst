@@ -8,7 +8,7 @@ class ModernizationSection(BaseModel):
     """Structured modernization document section."""
     section_id: str = Field(description="Unique section identifier (e.g., executive_summary)")
     title: str = Field(description="Human-readable section title")
-    content: str = Field(description="Section content (200-400 words, plain text with markdown support)")
+    content: str = Field(description="Section content (plain text with markdown support)")
     
     class Config:
         json_schema_extra = {
