@@ -8,12 +8,14 @@ from api.routes.prd_routes import router as prd_router
 from api.routes.file_routes import router as file_router
 from api.routes.backlog_routes import router as backlog_router
 from api.routes.activity_routes import router as activity_router
+from api.routes.design_routes import router as design_router
 
 _settings = get_settings()
 
 # Ensure required directories exist on startup
 _settings.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 _settings.GENERATED_PRDS_DIR.mkdir(parents=True, exist_ok=True)
+_settings.GENERATED_DESIGNS_DIR.mkdir(parents=True, exist_ok=True)
 _settings.BACKLOG_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -33,3 +35,4 @@ app.include_router(prd_router)
 app.include_router(file_router)
 app.include_router(backlog_router)
 app.include_router(activity_router)
+app.include_router(design_router)

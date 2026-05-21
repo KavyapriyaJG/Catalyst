@@ -39,6 +39,16 @@ fastapi run main.py
 
 The API will then be available at `http://127.0.0.1:8000`.
 
+```
+docker run -d \     
+  --name aiproductcode \
+  -e POSTGRES_USER=hamsa \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=catalyst \
+  -p 5432:5432 \
+  ankane/pgvector
+```
+
 ## PRD source priority toggles
 
 For PRD generation requests, you can provide both code and document inputs and control source emphasis using two mutually exclusive flags:
