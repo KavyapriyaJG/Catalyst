@@ -40,6 +40,8 @@ class PrdGenerateRequest(BaseModel):
     input_path: str | None = None
     github_urls: list[str] | None = None
     documents: list[dict] | None = None
+    prioritize_code: bool = False
+    prioritize_documents: bool = False
 
 
 class PrdListItem(BaseModel):
@@ -74,3 +76,36 @@ class UploadedFileItem(BaseModel):
     size: str
     uploaded_at: str
     file: None = None
+
+
+class DesignGenerateRequest(BaseModel):
+    prd_id: str
+    artifact_name: str | None = None
+    modernization_documents: list[dict] | None = None
+    context_artifact_ids: list[str] | None = None
+    generate_all: bool = False
+    diagram_type: str | None = None
+
+
+class DesignArtifactListItem(BaseModel):
+    id: str
+    group_id: str | None = None
+    prd_id: str
+    artifact_name: str
+    diagram_type: str
+    status: str
+    created_at: str
+    updated_at: str
+
+
+class DesignArtifactDetail(BaseModel):
+    id: str
+    group_id: str | None = None
+    prd_id: str
+    artifact_name: str
+    diagram_type: str
+    status: str
+    created_at: str
+    updated_at: str
+    content: str
+    explanation: str

@@ -14,6 +14,10 @@ def review_prd(state: AgentState):
     prd_json_str = json.dumps(state['prd'], indent=2) if isinstance(state['prd'], dict) else str(state['prd'])
     prompt = REVIEWER_PROMPT.format(
         analysis=json.dumps(state['analysis'], indent=2) if isinstance(state['analysis'], dict) else str(state['analysis']),
+        priority_mode=state.get("priority_mode", "balanced_full"),
+        code_priority=state.get("code_priority", 100),
+        docs_priority=state.get("docs_priority", 100),
+        priority_reason=state.get("priority_reason", ""),
         prd=prd_json_str
     )
     t0 = time.time()

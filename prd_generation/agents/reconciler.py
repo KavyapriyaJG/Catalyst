@@ -18,6 +18,10 @@ def reconcile(state: AgentState):
         prd=prd_json_str,
         review=json.dumps(state['review'], indent=2),
         analysis=analysis_str,
+        priority_mode=state.get("priority_mode", "balanced_full"),
+        code_priority=state.get("code_priority", 100),
+        docs_priority=state.get("docs_priority", 100),
+        priority_reason=state.get("priority_reason", ""),
         json_instructions=json_instructions
     )
     t0 = time.time()

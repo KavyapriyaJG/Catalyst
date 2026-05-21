@@ -354,6 +354,17 @@ STRICT RULES:
 - Use clear, concise enterprise language.
 - Call out all conflicts explicitly — this is valuable insight.
 
+PRIORITY POLICY (must follow exactly):
+- Resolved mode: {priority_mode}
+- Effective priorities: code={code_priority}, docs={docs_priority}
+- Priority rationale: {priority_reason}
+- If mode is code_high: prioritize code evidence and implementation truth first, while still incorporating document intent.
+- If mode is docs_high: prioritize document intent first, while still incorporating code realities and constraints.
+- If mode is auto_bias: prioritize sources according to effective content-derived priorities while still using both.
+- Never ignore either source when both are present.
+- Priority policy is INTERNAL guidance only.
+- Do NOT mention priority mode, weights, rationale, or any "given priority" statement in the final PRD text.
+
 COMBINED ANALYSIS PROCESS:
 
 1. CONTEXT & RECONCILIATION
@@ -535,6 +546,17 @@ SCORING GUIDE:
 SOURCE ANALYSIS (use this as ground truth):
 {analysis}
 
+RESOLVED SOURCE PRIORITY:
+- Mode: {priority_mode}
+- Effective priorities: code={code_priority}, docs={docs_priority}
+- Rationale: {priority_reason}
+
+PRIORITY-SPECIFIC REVIEW RULES:
+- Validate that the PRD emphasis aligns with the resolved source priority mode.
+- In code_high mode, flag missing implementation-grounded details as critical/moderate based on impact.
+- In docs_high mode, flag missing business-intent and requirement-completeness details as critical/moderate based on impact.
+- In auto_bias mode, verify emphasis follows effective content-derived priorities while still covering both sources.
+
 PRD TO EVALUATE:
 {prd}
 
@@ -577,6 +599,11 @@ REVIEW FINDINGS:
 
 SOURCE ANALYSIS (ground truth):
 {analysis}
+
+RESOLVED SOURCE PRIORITY:
+- Mode: {priority_mode}
+- Effective priorities: code={code_priority}, docs={docs_priority}
+- Rationale: {priority_reason}
 
 {json_instructions}
 
@@ -633,4 +660,11 @@ RECONCILIATION RULES:
    - Do NOT include meta-commentary about the review process
    - Use clear enterprise language
    - All section content must be markdown formatted
+
+10. PRIORITY ADHERENCE
+   - Preserve the requested source emphasis in the revised PRD.
+   - code_high: lead with code-grounded truth while still using document context.
+   - docs_high: lead with document-grounded requirements while still validating against code realities.
+   - auto_bias: follow effective content-derived priorities while preserving both source perspectives.
+   - Do not drop the secondary source when both are available.
 """

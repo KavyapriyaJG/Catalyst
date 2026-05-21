@@ -110,6 +110,7 @@ class Settings(BaseSettings):
     # ── Resolved filesystem paths (not env-configurable) ─────────
     WORKSPACE_DIR: Path = _PROJECT_ROOT / "workspace"
     GENERATED_PRDS_DIR: Path = _PROJECT_ROOT / "generated_prds"
+    GENERATED_DESIGNS_DIR: Path = _PROJECT_ROOT / "generated_designs"
     UPLOADS_DIR: Path = _PROJECT_ROOT / "uploads"
     BACKLOG_FILES_DIR: Path = _PROJECT_ROOT / "Backlog_Files"
     MODELS_EMBEDDINGS_DIR: Path = _PROJECT_ROOT / "models" / "embeddings"
