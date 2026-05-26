@@ -6,11 +6,15 @@ from pathlib import Path
 
 import yaml
 from langchain_core.prompts import ChatPromptTemplate
+from sqlalchemy import select
 
 from api.models import DesignArtifactDetail, DesignArtifactListItem
 from api.services.prd_service import extract_and_validate_documents, get_prd
+from backlog_generation.db import get_session
 from config import get_settings
+from modernization.models import ModernizationDocRecord
 from prd_generation.llm import get_llm_codex
+from utils.document_utils import extract_document_content
 
 SUPPORTED_DIAGRAM_TYPES = ("database", "api", "architecture")
 
@@ -75,6 +79,122 @@ def _modernization_docs_to_text(modernization_documents: list[dict[str, str]]) -
         content = doc.get("content", "")
         sections.append(f"# Document: {name}\n{content}")
     return "\n\n".join(sections).strip()
+
+
+def _modernization_record_to_text(record: ModernizationDocRecord) -> str:
+    lines: list[str] = [f"# Modernization Document: {record.name}"]
+
+    if record.modernization_goals:
+        lines.append("## Modernization Goals")
+        lines.append(record.modernization_goals)
+
+    if record.generated_sections and isinstance(record.generated_sections, dict):
+        for section, value in record.generated_sections.items():
+            lines.append(f"## {section}")
+            if isinstance(value, str):
+                lines.append(value)
+            else:
+                lines.append(json.dumps(value, indent=2))
+    elif record.description:
+        lines.append("## Summary")
+        lines.append(record.description)
+
+    text = "\n\n".join(lines).strip()
+
+    # Ensure minimal non-empty context even for early drafts.
+    if len(text) < 40:
+        return f"# Modernization Document: {record.name}\n\nDraft modernization document."
+    return text
+
+
+def _extract_source_assets_from_record(record: ModernizationDocRecord) -> list[dict[str, str]]:
+    docs: list[dict[str, str]] = []
+    assets = record.source_assets if isinstance(record.source_assets, list) else []
+
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        path = str(asset.get("path", "")).strip()
+        filename = str(asset.get("filename", "")).strip() or "supporting-document"
+        if not path:
+            continue
+
+        try:
+            content = extract_document_content(Path(path))
+        except Exception:
+            continue
+
+        if not content.strip():
+            continue
+
+        docs.append({"filename": filename, "content": content})
+
+    return docs
+
+
+def _extract_modernization_docs_from_db(doc_refs: list[dict]) -> list[dict[str, str]]:
+    modernization_refs = [
+        ref for ref in doc_refs if isinstance(ref, dict) and ref.get("kind") == "modernization_doc"
+    ]
+    if not modernization_refs:
+        return []
+
+    doc_ids = [str(ref.get("id", "")).strip() for ref in modernization_refs if ref.get("id")]
+    if not doc_ids:
+        return []
+
+    with get_session() as session:
+        rows = session.scalars(
+            select(ModernizationDocRecord).where(ModernizationDocRecord.id.in_(doc_ids))
+        ).all()
+
+    by_id = {row.id: row for row in rows}
+    missing = [doc_id for doc_id in doc_ids if doc_id not in by_id]
+    if missing:
+        raise ValueError(f"Modernization document(s) not found: {', '.join(missing)}")
+
+    ordered_docs: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for ref in modernization_refs:
+        doc_id = str(ref.get("id", "")).strip()
+        if not doc_id or doc_id in seen:
+            continue
+        seen.add(doc_id)
+
+        record = by_id[doc_id]
+        ordered_docs.append(
+            {
+                "filename": str(ref.get("name") or record.name),
+                "content": _modernization_record_to_text(record),
+            }
+        )
+
+        # Add linked supporting assets so design generation has richer context.
+        ordered_docs.extend(_extract_source_assets_from_record(record))
+
+    return ordered_docs
+
+
+def _resolve_modernization_documents(doc_refs: list[dict] | None) -> list[dict[str, str]]:
+    refs = doc_refs or []
+    if not refs:
+        return []
+
+    db_docs = _extract_modernization_docs_from_db(refs)
+    uploaded_doc_refs = [
+        ref for ref in refs if isinstance(ref, dict) and ref.get("kind") != "modernization_doc"
+    ]
+    uploaded_docs = extract_and_validate_documents(uploaded_doc_refs) if uploaded_doc_refs else []
+
+    documents = [*db_docs, *uploaded_docs]
+    non_empty_docs = [doc for doc in documents if doc.get("content", "").strip()]
+    total_length = sum(len(doc.get("content", "")) for doc in non_empty_docs)
+    if not non_empty_docs:
+        raise ValueError(
+            f"Document extraction failed or insufficient content. "
+            f"Extracted: {total_length} chars from {len(documents)} documents."
+        )
+    return non_empty_docs
 
 
 def _truncate_for_prompt(value: str, max_chars: int = 12000) -> str:
@@ -568,7 +688,7 @@ def generate_design_artifacts(
     prd_item = get_prd(prd_id)
     prd_text = _prd_to_text(prd_item.content)
 
-    docs = extract_and_validate_documents(modernization_documents)
+    docs = _resolve_modernization_documents(modernization_documents)
     modernization_text = _modernization_docs_to_text(docs)
     document_names = [doc.get("filename", "document") for doc in docs]
     context_entries = _load_context_artifacts(context_artifact_ids)
