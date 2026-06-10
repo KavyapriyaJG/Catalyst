@@ -144,21 +144,25 @@ async def generate_prd_sse(payload: PrdGenerateRequest):
 
 @router.post("/generate/dummy")
 async def generate_prd_sse_dummy(_payload: PrdGenerateRequest):
-    """Dummy endpoint that replays the real /prd/generate SSE stream with artificial delays."""
-    _ = _resolve_priority_mode(_payload)
-
+    """Return PRD generated with specific ID via streaming."""
+    
     async def event_generator():
         for msg, delay in DUMMY_PRD_STREAM_EVENTS:
             yield f"data: {msg}\n\n"
             await asyncio.sleep(delay)
 
-        prd_dict = DUMMY_PRD_TEXT
-        prd_id, prd_json, filename, stored_prd_name = save_prd(prd_dict, prd_name=_payload.prd_name)
-        
-        yield (
-            f"event: complete\n"
-            f"data: {json.dumps({'prd': prd_json, 'id': prd_id, 'filename': filename, 'prd_name': stored_prd_name})}\n\n"
-        )
+        prd_id = "0b5cb7e9-774c-4ba6-b054-0491a55f2275"
+        try:
+            prd_item = get_prd(prd_id)
+            yield (
+                f"event: complete\n"
+                f"data: {json.dumps({'prd': prd_item.content, 'id': prd_item.id, 'filename': prd_item.filename, 'prd_name': prd_item.prd_name})}\n\n"
+            )
+        except FileNotFoundError:
+            yield (
+                f"event: complete\n"
+                f"data: {json.dumps({'prd': DUMMY_PRD_TEXT, 'id': prd_id, 'filename': 'prd_dummy.json', 'prd_name': 'Dummy PRD'})}\n\n"
+            )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

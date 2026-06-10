@@ -32,6 +32,7 @@ from utils.file_handling import (
     validate_file_size,
     get_extension_error_message,
 )
+from dummy_modernization_content import DUMMY_MODERNIZATION_SECTIONS, DUMMY_MODERNIZATION_STREAM_EVENTS
 
 router = APIRouter(prefix="/modernization", tags=["modernization"])
 settings = get_settings()
@@ -194,6 +195,36 @@ async def generate_modernization_doc_sse(payload: ModernizationGenerateRequest):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+@router.post("/generate/dummy")
+async def generate_modernization_dummy(payload: ModernizationGenerateRequest):
+    """Generate dummy modernization document with streaming for loading effect."""
+    
+    async def event_generator():
+        for msg, delay in DUMMY_MODERNIZATION_STREAM_EVENTS:
+            yield f"data: {msg}\n\n"
+            await asyncio.sleep(delay)
+
+        doc_id = "7bc0c9e8-6b0d-41cf-893d-96ae712f27c8"
+        try:
+            # Try to fetch existing doc with this ID
+            doc = modernization_service.get_modernization_doc(doc_id)
+            if doc and doc.generated_sections:
+                yield (
+                    f"event: complete\n"
+                    f"data: {json.dumps({'id': doc_id, 'name': doc.name, 'modernization_goals': doc.modernization_goals})}\n\n"
+                )
+            else:
+                raise FileNotFoundError()
+        except (FileNotFoundError, AttributeError):
+            # If not found, return dummy with payload values
+            yield (
+                f"event: complete\n"
+                f"data: {json.dumps({'id': doc_id, 'name': payload.name, 'modernization_goals': payload.modernization_goals})}\n\n"
+            )
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @router.get("/", response_model=list[ModernizationDocListItem])
 def list_modernization_docs(
     status_filter: Optional[str] = Query(None, description="Filter by status"),
@@ -214,6 +245,19 @@ def get_modernization_doc(doc_id: str) -> ModernizationDocResponse:
     """Get a specific modernization document."""
     doc = modernization_service.get_modernization_doc(doc_id)
     if not doc:
+        # If doc not found and it's our dummy ID, return dummy content
+        if doc_id == "7bc0c9e8-6b0d-41cf-893d-96ae712f27c8":
+            return ModernizationDocResponse(
+                id=doc_id,
+                name="Dummy Modernization Plan",
+                description="Sample modernization strategy document",
+                modernization_goals="Transform legacy system to cloud-native architecture",
+                generated_sections=DUMMY_MODERNIZATION_SECTIONS,
+                status="draft",
+                linked_prds=[],
+                created_at=datetime.now(timezone.utc).isoformat(),
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
         raise HTTPException(status_code=404, detail="Modernization document not found")
     return doc
 
